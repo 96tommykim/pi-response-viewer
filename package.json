@@ -1,13 +1,17 @@
 {
   "name": "pi-response-viewer",
   "version": "0.2.0",
-  "private": true,
+  "description": "A local, output-only response viewer for Pi.",
   "type": "module",
-  "license": "UNLICENSED",
+  "license": "MIT",
   "keywords": ["pi-package"],
   "repository": {
     "type": "git",
     "url": "git+ssh://git@github.com/96tommykim/pi-response-viewer.git"
+  },
+  "homepage": "https://github.com/96tommykim/pi-response-viewer#readme",
+  "bugs": {
+    "url": "https://github.com/96tommykim/pi-response-viewer/issues"
   },
   "engines": {
     "node": ">=22.19.0"
@@ -17,6 +21,7 @@
   },
   "files": [
     "README.md",
+    "LICENSE",
     "extensions/response-viewer/index.ts",
     "extensions/response-viewer/state.ts",
     "extensions/response-viewer/server.ts",
@@ -25,9 +30,7 @@
     "extensions/response-viewer/renderer.js",
     "extensions/response-viewer/syntax.js",
     "extensions/response-viewer/template.html",
-    "extensions/response-viewer/THIRD_PARTY_NOTICES.md",
     "extensions/response-viewer/vendor/*.js",
-    "extensions/response-viewer/vendor/*.woff2",
     "extensions/response-viewer/vendor/LICENSE-*.txt"
   ],
   "peerDependencies": {
@@ -45,11 +48,8 @@
   "scripts": {
     "typecheck": "./scripts/link-pi-types.sh && tsc --noEmit -p tsconfig.json",
     "test:unit": "node --experimental-strip-types extensions/response-viewer/test.ts",
-    "test:state": "node --experimental-strip-types extensions/response-viewer/test.ts",
-    "test:server": "node --experimental-strip-types extensions/response-viewer/test.ts",
     "test:browser": "node --experimental-strip-types extensions/response-viewer/security-test.ts",
-    "test:security": "node --experimental-strip-types extensions/response-viewer/security-test.ts",
-    "check": "npm run typecheck && npm run test:unit && npm run test:browser",
+    "test": "npm run typecheck && npm run test:unit && npm run test:browser",
     "package:check": "npm pack --dry-run"
   }
 }

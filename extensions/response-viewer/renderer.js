@@ -1,4 +1,4 @@
-/* First-party Markdown renderer shared by the response-viewer page and browser security fixture. */
+/* First-party Markdown renderer for the response-viewer page. */
 (() => {
   const escape = value => value.replace(/[&<>"']/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" })[c]);
   const markedRenderer = new marked.Renderer();

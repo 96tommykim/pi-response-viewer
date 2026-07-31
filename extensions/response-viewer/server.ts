@@ -13,7 +13,7 @@ const headers = {
 	"Referrer-Policy": "no-referrer",
 	"Cross-Origin-Opener-Policy": "same-origin",
 	"Cross-Origin-Resource-Policy": "same-origin",
-	"Content-Security-Policy": "default-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'; img-src 'none'; media-src 'none'; connect-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'",
+	"Content-Security-Policy": "default-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'; img-src 'none'; media-src 'none'; connect-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'none'",
 };
 
 export type ViewerServer = Readonly<{ url: string; publish(snapshot: ViewerSnapshot, immediate?: boolean): void; close(): Promise<void> }>;
@@ -108,7 +108,6 @@ export async function startViewerServer(directory: string, getState: () => Viewe
 		...await Promise.all(["prism-core", "prism-markup", "prism-clike", "prism-javascript", "prism-typescript", "prism-go", "prism-python", "prism-bash", "prism-yaml", "prism-json", "prism-sql", "prism-hcl", "prism-docker", "prism-markdown"].map(async name => [`/vendor/${name}-1.30.0.min.js`, { body: await readFile(join(directory, "vendor", `${name}-1.30.0.min.js`)), type: "text/javascript; charset=utf-8" }] as const)),
 		["/vendor/marked-18.0.5.umd.js", { body: await readFile(join(directory, "vendor/marked-18.0.5.umd.js")), type: "text/javascript; charset=utf-8" }],
 		["/vendor/dompurify-3.4.12.min.js", { body: await readFile(join(directory, "vendor/dompurify-3.4.12.min.js")), type: "text/javascript; charset=utf-8" }],
-		["/vendor/PretendardVariable-1.3.9.woff2", { body: await readFile(join(directory, "vendor/PretendardVariable-1.3.9.woff2")), type: "font/woff2" }],
 	]);
 	const clients = new SseClients();
 	const sockets = new Set<Socket>();

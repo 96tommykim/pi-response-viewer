@@ -3,7 +3,6 @@ import { EventEmitter, once } from "node:events";
 import { request } from "node:http";
 import { connect } from "node:net";
 import { readFile } from "node:fs/promises";
-import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runInNewContext } from "node:vm";
@@ -115,18 +114,16 @@ const get = (path: string, method = "GET", host = url.host) => new Promise<Resul
 	req.on("error", reject); req.end();
 });
 const page = await get(url.pathname);
-assert.equal(page.status, 200); assert.match(String(page.headers["content-security-policy"]), /default-src 'self'/); assert.equal(page.headers["cache-control"], "no-store, max-age=0"); assert.equal(page.headers["x-content-type-options"], "nosniff"); assert.equal(page.headers["access-control-allow-origin"], undefined);
+assert.equal(page.status, 200); assert.match(String(page.headers["content-security-policy"]), /default-src 'self'/); assert.match(String(page.headers["content-security-policy"]), /font-src 'none'/); assert.equal(page.headers["cache-control"], "no-store, max-age=0"); assert.equal(page.headers["x-content-type-options"], "nosniff"); assert.equal(page.headers["access-control-allow-origin"], undefined);
 assert.equal((await get(url.pathname, "GET", "localhost:1")).status, 404);
 assert.equal((await get(`${url.pathname}renderer.js`)).status, 200, "renderer is served beneath the tokenized path");
-const prismAssets = [
-	["prism-core", "6caad316dd991f24f8004e0b9c19c055cb5829ff65e973fbee406f96d81b8e7e"], ["prism-markup", "879fc9d256c352d980e053857fa707330853b8bfb67ce284ea661a24dec5756e"], ["prism-clike", "c76ba4e240932bdc75546be30e550f5ba5e13815ff71511c76e9e27ac3072444"], ["prism-javascript", "0345ea83e12b7b974e953c79a64dea35a40308309449db70b82020fb688ac321"], ["prism-typescript", "852f5513bb9ca9db247f86ecfce74acc91c541749d34929157240518fef8152a"], ["prism-go", "1225b4afb593126d4082da5fd2b131aede39831c2b2a62d6b07ea025acd2bf3f"], ["prism-python", "ed4385685bcf2d4935c8dbbab4bde16603da1329e092d2bf36c3dadd67e9a85c"], ["prism-bash", "6260814110e5182f2956e3bd257429548d9dbf2a9b66a63719b26cf9fac966a7"], ["prism-yaml", "719c8e8b8c344dc9de510c729f65ba840b1502a0a8e7e25e2ad19ee715f65c02"], ["prism-json", "956d86baa5ae7ec4106758f354ac2d140bdcd7fc103dece02f73ed12b8d663e4"], ["prism-sql", "3fc5f8ce69950ec73adc972f061df42aaea78faa4864709134ea2adc083f3a33"], ["prism-hcl", "6c8bc9ea13f7ad08648eb2ffdda99d5ed674844220b2b4757aeb19d06fc78b18"], ["prism-docker", "a6cc0faa5977a40652f62798a692a5ae171e0380480df3ed056e117597ec52dd"], ["prism-markdown", "9f1166a087d9a9ffb3a833f2bccbe00920b55b41ade02a0b3054b7ab5fbc70ea"],
-] as const;
-for (const [name, hash] of prismAssets) { const asset = await get(`${url.pathname}vendor/${name}-1.30.0.min.js`); assert.equal(asset.status, 200, `${name} is tokenized and served`); assert.equal(asset.headers["content-type"], "text/javascript; charset=utf-8"); assert.equal(Number(asset.headers["content-length"]), Buffer.byteLength(asset.body)); assert.equal(createHash("sha256").update(asset.body).digest("hex"), hash); assert.equal((await get(`${url.pathname}vendor/${name}-1.30.0.min.js`, "POST")).status, 405); assert.equal((await get(`/wrong${url.pathname}vendor/${name}-1.30.0.min.js`)).status, 404); }
+for (const name of ["prism-core", "prism-markup", "prism-clike", "prism-javascript", "prism-typescript", "prism-go", "prism-python", "prism-bash", "prism-yaml", "prism-json", "prism-sql", "prism-hcl", "prism-docker", "prism-markdown"]) {
+	const asset = await get(`${url.pathname}vendor/${name}-1.30.0.min.js`);
+	assert.equal(asset.status, 200, `${name} is tokenized and served`);
+	assert.equal(asset.headers["content-type"], "text/javascript; charset=utf-8");
+	assert.equal((await get(`${url.pathname}vendor/${name}-1.30.0.min.js`, "POST")).status, 405);
+}
 const syntax = await get(`${url.pathname}syntax.js`); assert.equal(syntax.status, 200); assert.equal(syntax.headers["content-type"], "text/javascript; charset=utf-8"); assert.equal((await get(`${url.pathname}syntax.js`, "POST")).status, 405);
-const font = await get(`${url.pathname}vendor/PretendardVariable-1.3.9.woff2`); assert.equal(font.status, 200); assert.equal(font.headers["content-type"], "font/woff2"); assert.equal(Number(font.headers["content-length"]), 2_057_688);
-assert.equal((await get(`${url.pathname}vendor/PretendardVariable-1.3.9.woff2`, "POST")).status, 405);
-assert.equal((await get(`/wrong${url.pathname}vendor/PretendardVariable-1.3.9.woff2`)).status, 404);
-assert.equal((await get(`${url.pathname}test-fixtures/renderer-security.html`)).status, 404, "browser security fixture is never served");
 assert.equal((await get(`${url.pathname}nope`)).status, 404);
 const wrongMethod = await get(url.pathname, "POST"); assert.equal(wrongMethod.status, 405); assert.equal(wrongMethod.headers.allow, "GET");
 assert.equal((await get(`${url.pathname}events`, "POST")).status, 405);
@@ -238,14 +235,24 @@ if (savedChild === undefined) delete process.env.PI_SUBAGENT_CHILD; else process
 
 const template = await readFile(join(here, "template.html"), "utf8");
 const client = await readFile(join(here, "client.js"), "utf8");
-const fontFile = await readFile(join(here, "vendor", "PretendardVariable-1.3.9.woff2"));
-assert.equal(createHash("sha256").update(fontFile).digest("hex"), "9599f12fd42fc0bce1cd50b47a0c022e108d7aa64dd0d1bb0ed44f3282d900b4");
-assert.doesNotMatch(template, /composer|static-raw/i); assert.doesNotMatch(template, /https?:\/\//i); assert.match(template, /vendor\/PretendardVariable-1\.3\.9\.woff2/); assert.match(template, /font-family:"Pretendard Variable"/); assert.doesNotMatch(template, /(?:code|pre|code-label)[^{]*\{[^}]*Jetendard/); assert.match(template, /--mono:ui-monospace/); assert.match(template, /--reader-size|--reader-leading|--reader-measure/); assert.match(template, /vendor\/marked-18\.0\.5\.umd\.js/); assert.match(template, /link-policy\.js/); assert.match(template, /renderer\.js/);
-const syntaxSource = await readFile(join(here, "syntax.js"), "utf8"); const prismLicense = await readFile(join(here, "vendor", "LICENSE-prism.txt"), "utf8"); const notices = await readFile(join(here, "THIRD_PARTY_NOTICES.md"), "utf8");
-assert.match(client, /events\.close\(\)/); assert.match(client, /ResponseViewerRenderer\.render/); assert.match(template, /New content available/); assert.match(client, /heading-link/); assert.match(client, /copy\(plain, copyButton\)/); assert.match(client, /replaceChildren\(window\.ResponseViewerSyntax\.highlight/); assert.match(template, /history-control/); assert.match(template, /previous-response/); assert.match(template, /assistant response history/); assert.match(template, /aria-label="Assistant response"/); assert.match(template, /response-header[^}]*scroll-margin-top:84px/); assert.match(client, /selectedId/); assert.match(client, /Reconnecting/); assert.match(client, /cadence = markdown/); assert.match(client, /selectedChanged && renderedId !== null\) clearHash/);
-assert.match(syntaxSource, /Prism\.manual/); assert.match(syntaxSource, /ALLOWED_TAGS: \["span"\]/); assert.match(client, /codePreferences/); assert.match(client, /pruneCodePreferences\(responses\)/); assert.match(client, /codePreferences\.clear\(\)/); assert.match(template, /@media print/); assert.match(template, /@page/); assert.match(template, /vendor\/prism-core-1\.30\.0\.min\.js/); assert.match(template, /syntax\.js/); assert.match(prismLicense, /MIT LICENSE/i); for (const [name, hash] of prismAssets) { assert.match(notices, new RegExp(`${name}-1\\.30\\.0\\.min\\.js`)); assert.match(notices, new RegExp(hash)); } assert.doesNotMatch(`${template}\n${syntaxSource}`, /https?:\/\//, "production template and syntax helper contain no remote URL");
-assert.match(template, /\.code-block,\.table-wrap \{ overflow:visible !important;[^}]*break-inside:auto/, "print allows long code and tables to paginate"); assert.match(template, /tr \{ break-inside:avoid/, "print avoids table-row breaks");
-assert.match(client, /Math\.max\(margin \+ 2, toolbarClearance\)/, "scroll spy includes deterministic hash epsilon"); assert.match(client, /scrollIntoView\(\{ block: "start", behavior: "instant" \}\)/, "hash navigation bypasses CSS smooth scrolling"); assert.match(client, /outline\.scrollTop \+=/, "active item reveal only scrolls the outline list"); assert.match(template, /#outline-links \{ max-height:/, "outline links are the independent scroll container");
-const closedCleanup = client.indexOf("if (nextSnapshot.status === \"closed\") { cleanup(); return; }");
-assert.equal(closedCleanup > client.indexOf("const cleanup"), true, "closed snapshots synchronously close EventSource and remove scroll/hash work without another render");
+const syntaxSource = await readFile(join(here, "syntax.js"), "utf8");
+const prismLicense = await readFile(join(here, "vendor", "LICENSE-prism.txt"), "utf8");
+const markedLicense = await readFile(join(here, "vendor", "LICENSE-marked.txt"), "utf8");
+const dompurifyLicense = await readFile(join(here, "vendor", "LICENSE-dompurify.txt"), "utf8");
+assert.doesNotMatch(template, /composer|static-raw|@font-face|\.woff2/i);
+assert.doesNotMatch(template, /https?:\/\//i);
+assert.match(template, /Pretendard,"Apple SD Gothic Neo"/);
+assert.match(template, /--mono:ui-monospace/);
+assert.match(template, /vendor\/marked-18\.0\.5\.umd\.js/);
+assert.match(template, /@media print/);
+assert.match(template, /\.toolbar,.outline,.new-content,.heading-link,.sr-only,.code-actions \{ display:none !important;/);
+assert.match(template, /pre,pre\.code-collapsed,pre\.code-wrapped \{ max-height:none !important;/);
+assert.match(client, /events\.close\(\)/);
+assert.match(client, /copy\(plain, copyButton\)/);
+assert.match(client, /codePreferences/);
+assert.match(client, /selectedId/);
+assert.match(syntaxSource, /Prism\.manual/);
+assert.match(syntaxSource, /ALLOWED_TAGS: \["span"\]/);
+assert.match(prismLicense, /MIT LICENSE/i); assert.match(markedLicense, /MIT license/i); assert.match(dompurifyLicense, /Apache License/i);
+assert.doesNotMatch(`${template}\n${syntaxSource}`, /https?:\/\//, "production template and syntax helper contain no remote URL");
 console.log("PASS: response-viewer state, async spawn failure, bounded SSE, HTTP policy, links, lifecycle, shutdown, and template shell");

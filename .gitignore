@@ -1,5 +1,4 @@
 node_modules/
 *.tgz
-extensions/response-viewer/test-fixtures/.production-*.html
-extensions/response-viewer/test-fixtures/.production-*.pdf
-extensions/response-viewer/test-fixtures/.production-*.txt
+.pi-subagents/
+.vscode/
