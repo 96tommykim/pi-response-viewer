@@ -1,0 +1,55 @@
+{
+  "name": "pi-response-viewer",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "license": "UNLICENSED",
+  "keywords": ["pi-package"],
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/96tommykim/pi-response-viewer.git"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "pi": {
+    "extensions": ["./extensions/response-viewer/index.ts"]
+  },
+  "files": [
+    "README.md",
+    "extensions/response-viewer/index.ts",
+    "extensions/response-viewer/state.ts",
+    "extensions/response-viewer/server.ts",
+    "extensions/response-viewer/client.js",
+    "extensions/response-viewer/link-policy.js",
+    "extensions/response-viewer/renderer.js",
+    "extensions/response-viewer/syntax.js",
+    "extensions/response-viewer/template.html",
+    "extensions/response-viewer/THIRD_PARTY_NOTICES.md",
+    "extensions/response-viewer/vendor/*.js",
+    "extensions/response-viewer/vendor/*.woff2",
+    "extensions/response-viewer/vendor/LICENSE-*.txt"
+  ],
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.3",
+    "typescript": "^5.9.3"
+  },
+  "scripts": {
+    "typecheck": "./scripts/link-pi-types.sh && tsc --noEmit -p tsconfig.json",
+    "test:unit": "node --experimental-strip-types extensions/response-viewer/test.ts",
+    "test:state": "node --experimental-strip-types extensions/response-viewer/test.ts",
+    "test:server": "node --experimental-strip-types extensions/response-viewer/test.ts",
+    "test:browser": "node --experimental-strip-types extensions/response-viewer/security-test.ts",
+    "test:security": "node --experimental-strip-types extensions/response-viewer/security-test.ts",
+    "check": "npm run typecheck && npm run test:unit && npm run test:browser",
+    "package:check": "npm pack --dry-run"
+  }
+}

@@ -1,0 +1,68 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Response viewer renderer security test</title>
+<div id="output"></div><pre id="result"></pre>
+<script src="../vendor/marked-18.0.5.umd.js"></script>
+<script src="../vendor/dompurify-3.4.12.min.js"></script>
+<script src="../vendor/prism-core-1.30.0.min.js"></script>
+<script src="../vendor/prism-clike-1.30.0.min.js"></script>
+<script src="../vendor/prism-javascript-1.30.0.min.js"></script>
+<script src="../link-policy.js"></script>
+<script src="../renderer.js"></script>
+<script src="../syntax.js"></script>
+<script>
+(() => {
+  const output = document.getElementById("output"), result = document.getElementById("result");
+  const fail = message => { throw new Error(message); };
+  const check = (condition, message) => { if (!condition) fail(message); };
+  const markdown = [
+    "<scr" + "ipt>window.__responseViewerXss = true</scr" + "ipt>",
+    '<img src="https://example.test/image.png" onerror="window.__responseViewerXss = true">',
+    '<svg onload="window.__responseViewerXss = true"><circle></circle></svg>',
+    '<form action="https://example.test"><input name="secret"></form>',
+    '[javascript](javascript:alert(1)) [data](data:text/html,unsafe) [relative](relative/path) [root](/root) [protocol-relative](//example.test)',
+    '[HTTPS](https://example.test/path "Secure") [mailto](mailto:test@example.test) [fragment](#section)',
+    '![image](https://example.test/image.png)',
+    '- outer\n  - nested\n    - deep',
+    '~~~js\n</span><img onerror="window.__responseViewerXss = true">\n~~~'
+  ].join("\n\n");
+  try {
+    output.innerHTML = window.ResponseViewerRenderer.render(markdown);
+    check(window.__responseViewerXss === undefined, "hostile script or event handler executed");
+    const allowedTags = new Set(["A","BLOCKQUOTE","BR","CODE","DEL","EM","H1","H2","H3","H4","H5","H6","HR","LI","OL","P","PRE","STRONG","TABLE","THEAD","TBODY","TR","TH","TD","UL"]);
+    const allowedAttrs = new Set(["href","title","align","class","rel","target"]);
+    for (const element of output.querySelectorAll("*")) {
+      check(allowedTags.has(element.tagName), `disallowed rendered tag: ${element.tagName}`);
+      for (const attribute of element.attributes) check(allowedAttrs.has(attribute.name), `disallowed rendered attribute: ${element.tagName}[${attribute.name}]`);
+    }
+    check(!output.querySelector("script,img,svg,form,input,object,iframe"), "unsafe element remained in rendered output");
+    check(output.querySelector("ul ul ul"), "nested unordered lists did not retain semantic containers");
+    const hostileCode = output.querySelector("code.language-js");
+    const highlighted = window.ResponseViewerSyntax.highlight(hostileCode.textContent, window.ResponseViewerSyntax.languageFromCode(hostileCode)); hostileCode.replaceChildren(highlighted);
+    check(hostileCode.textContent.includes("</span><img"), "hostile code did not remain text");
+    check(!hostileCode.querySelector("img"), "Prism output introduced an unsafe element");
+    check(hostileCode.querySelector("span.token"), "explicit JavaScript fence did not produce Prism tokens");
+    for (const [alias, canonical] of [["go", "Go"], ["JS", "JavaScript"], ["JavaScript", "JavaScript"], ["ts", "TypeScript"], ["TypeScript", "TypeScript"], ["python", "Python"], ["py", "Python"], ["bash", "Bash"], ["sh", "Bash"], ["shell", "Bash"], ["yaml", "YAML"], ["yml", "YAML"], ["json", "JSON"], ["sql", "SQL"], ["hcl", "HCL"], ["terraform", "HCL"], ["tf", "HCL"], ["docker", "Dockerfile"], ["dockerfile", "Dockerfile"], ["markdown", "Markdown"], ["md", "Markdown"]]) { const fence = document.createElement("code"); fence.className = "language-" + alias; check(window.ResponseViewerSyntax.canonical(window.ResponseViewerSyntax.languageFromCode(fence)) === canonical, "supported alias lost: " + alias); }
+    const unknown = document.createElement("code"); unknown.className = "language-unknown";
+    check(window.ResponseViewerSyntax.languageFromCode(unknown) === null && window.ResponseViewerSyntax.canonical(null) === "Plain", "unknown fence was auto-detected");
+    const links = [...output.querySelectorAll("a")];
+    const byText = text => links.find(link => link.textContent === text);
+    const https = byText("HTTPS"), mailto = byText("mailto"), fragment = byText("fragment");
+    check(https && https.getAttribute("href") === "https://example.test/path", "HTTPS link was not retained");
+    check(https.getAttribute("title") === "Secure", "safe link title was not retained");
+    check(https.getAttribute("target") === "_blank" && https.getAttribute("rel") === "noreferrer noopener", "HTTPS link target/rel policy failed");
+    check(mailto && mailto.getAttribute("href") === "mailto:test@example.test", "mailto link was not retained");
+    check(mailto.getAttribute("target") === "_blank" && mailto.getAttribute("rel") === "noreferrer noopener", "mailto target/rel policy failed");
+    check(fragment && fragment.getAttribute("href") === "#section", "same-page fragment was not retained");
+    check(!fragment.hasAttribute("target") && !fragment.hasAttribute("rel"), "fragment received external link attributes");
+    const unsafe = new Set(["javascript","data","relative","root","protocol-relative"]);
+    for (const link of links.filter(link => unsafe.has(link.textContent))) check(!link.hasAttribute("href"), `unsafe href was retained: ${link.textContent}`);
+    for (const link of output.querySelectorAll("a[href]")) check(/^(https:\/\/|mailto:|#)/.test(link.getAttribute("href")), `href bypassed strict allowlist: ${link.getAttribute("href")}`);
+    document.title = "PASS: response viewer renderer security";
+    result.textContent = document.title;
+  } catch (error) {
+    document.title = "FAIL: response viewer renderer security";
+    result.textContent = `${document.title}: ${error.message}`;
+  }
+})();
+</script>
