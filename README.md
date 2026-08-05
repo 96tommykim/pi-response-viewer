@@ -7,7 +7,9 @@ A local, output-only browser reader for [Pi](https://github.com/earendil-works/p
 - Per-turn response history, limited to 30 responses and 2 MiB in memory
 - Streaming Markdown with sanitized HTML, safe links, tables, lists, and headings
 - Local Prism highlighting for supported fenced languages
+- Mermaid diagrams and collapsible file trees for `mermaid` / `tree` fences
 - Copy, wrap, and expand controls for code blocks
+- `/viewer on|off` to enable or disable the viewer per session
 - Response outline, deep links, permalinks, smart follow, and history navigation
 - Responsive dark/light reader and Print/Save as PDF styles
 - Automatic reconnect status and a manual `/viewer` command
@@ -15,16 +17,10 @@ A local, output-only browser reader for [Pi](https://github.com/earendil-works/p
 ## Install
 
 ```sh
-pi install npm:pi-response-viewer
-```
-
-Or install directly from GitHub:
-
-```sh
 pi install git:github.com/96tommykim/pi-response-viewer
 ```
 
-Restart Pi after installation. The viewer opens once on the first agent run; use `/viewer` to reopen it.
+Restart Pi after installation. The viewer opens once on the first agent run; use `/viewer` to reopen it, or `/viewer off` to disable it for the session.
 
 ## Privacy and security
 
