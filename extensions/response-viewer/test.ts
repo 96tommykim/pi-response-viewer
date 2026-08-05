@@ -124,6 +124,7 @@ for (const name of ["prism-core", "prism-markup", "prism-clike", "prism-javascri
 	assert.equal((await get(`${url.pathname}vendor/${name}-1.30.0.min.js`, "POST")).status, 405);
 }
 const syntax = await get(`${url.pathname}syntax.js`); assert.equal(syntax.status, 200); assert.equal(syntax.headers["content-type"], "text/javascript; charset=utf-8"); assert.equal((await get(`${url.pathname}syntax.js`, "POST")).status, 405);
+for (const name of ["fence-renderers", "diff-view", "json-view", "csv-view", "navigator", "export-view"]) { const asset = await get(`${url.pathname}${name}.js`); assert.equal(asset.status, 200, `${name} is tokenized and served`); assert.equal(asset.headers["content-type"], "text/javascript; charset=utf-8"); assert.equal((await get(`${url.pathname}${name}.js`, "POST")).status, 405); }
 assert.equal((await get(`${url.pathname}nope`)).status, 404);
 const wrongMethod = await get(url.pathname, "POST"); assert.equal(wrongMethod.status, 405); assert.equal(wrongMethod.headers.allow, "GET");
 assert.equal((await get(`${url.pathname}events`, "POST")).status, 405);
@@ -185,6 +186,8 @@ const fire = async (event: string, payload: unknown, context: unknown) => { cons
 let branch: unknown[] = [{ message: textMessage("restored") }];
 const tuiContext = { mode: "tui", sessionManager: { getBranch: () => branch }, ui: { notify: () => undefined } };
 const savedChild = process.env.PI_SUBAGENT_CHILD;
+const restoreChild = () => { if (savedChild === undefined) delete process.env.PI_SUBAGENT_CHILD; else process.env.PI_SUBAGENT_CHILD = savedChild; };
+process.once("exit", restoreChild);
 delete process.env.PI_SUBAGENT_CHILD;
 await fire("session_start", {}, tuiContext);
 const latestResponse = (next: ViewerSnapshot) => next.responses.find(response => response.id === next.latestId);
@@ -231,7 +234,7 @@ process.env.PI_SUBAGENT_CHILD = "1";
 assert.equal(viewerEnabled(tuiContext), false);
 await disabledHandlers.get("session_start")!({}, tuiContext); await disabledHandlers.get("agent_start")!({}, tuiContext);
 assert.equal(disabledStarts, 0); assert.equal(disabledLaunches, 0, "non-TUI and child runs have no server or browser");
-if (savedChild === undefined) delete process.env.PI_SUBAGENT_CHILD; else process.env.PI_SUBAGENT_CHILD = savedChild;
+delete process.env.PI_SUBAGENT_CHILD;
 
 // /viewer on|off toggles the viewer for the current session; other event handlers are unaffected.
 const toggleHandlers = new Map<string, (event: unknown, ctx: unknown) => unknown>();
@@ -300,6 +303,13 @@ const client = await readFile(join(here, "client.js"), "utf8");
 const syntaxSource = await readFile(join(here, "syntax.js"), "utf8");
 const mermaidViewSource = await readFile(join(here, "mermaid-view.js"), "utf8");
 const treeViewSource = await readFile(join(here, "tree-view.js"), "utf8");
+const rendererSource = await readFile(join(here, "renderer.js"), "utf8");
+const fenceSource = await readFile(join(here, "fence-renderers.js"), "utf8");
+const diffSource = await readFile(join(here, "diff-view.js"), "utf8");
+const jsonSource = await readFile(join(here, "json-view.js"), "utf8");
+const csvSource = await readFile(join(here, "csv-view.js"), "utf8");
+const navigatorSource = await readFile(join(here, "navigator.js"), "utf8");
+const exportSource = await readFile(join(here, "export-view.js"), "utf8");
 const prismLicense = await readFile(join(here, "vendor", "LICENSE-prism.txt"), "utf8");
 const markedLicense = await readFile(join(here, "vendor", "LICENSE-marked.txt"), "utf8");
 const dompurifyLicense = await readFile(join(here, "vendor", "LICENSE-dompurify.txt"), "utf8");
@@ -311,24 +321,28 @@ assert.match(template, /--mono:ui-monospace/);
 assert.match(template, /vendor\/marked-18\.0\.5\.umd\.js/);
 assert.match(template, /vendor\/mermaid-11\.16\.1\.min\.js/);
 assert.match(template, /<script src="mermaid-view\.js">/);
-assert.match(template, /<script src="tree-view\.js">/);
+assert.match(template, /<script src="tree-view\.js">/); for (const name of ["fence-renderers", "diff-view", "json-view", "csv-view", "navigator", "export-view"]) assert.match(template, new RegExp(`<script src="${name}\\.js">`));
 assert.match(template, /@media print/);
 assert.match(template, /\.toolbar,.outline,.new-content,.heading-link,.sr-only,.code-actions \{ display:none !important;/);
 assert.match(template, /pre,pre\.code-collapsed,pre\.code-wrapped \{ max-height:none !important;/);
+assert.match(template, /\.diff-view \{ max-height:none !important; overflow:visible !important; \}/);
 assert.match(client, /events\.close\(\)/);
 assert.match(client, /copy\(plain, copyButton\)/);
 assert.match(client, /codePreferences/);
 assert.match(client, /selectedId/);
-assert.match(client, /ResponseViewerMermaid\.render\(plain, host, pre\)/);
-assert.match(client, /ResponseViewerTree\.build\(plain\)/);
+assert.match(client, /ResponseViewerFences\.render\(language\[0\]/);
+assert.match(client, /ResponseViewerNavigator\.create/);
+assert.match(client, /ResponseViewerExport\.create/);
 assert.match(client, /ResponseViewerMermaid\.onThemeChange\(\)/);
 assert.match(syntaxSource, /Prism\.manual/);
 assert.match(syntaxSource, /ALLOWED_TAGS: \["span"\]/);
 assert.match(syntaxSource, /\["mermaid", \["mermaid", "Mermaid"\]\]/);
-assert.match(syntaxSource, /\["tree", \["tree", "Tree"\]\]/);
+assert.match(syntaxSource, /\["tree", \["tree", "Tree"\]\]/); assert.match(syntaxSource, /\["diff", \["diff", "Diff"\]\]/); assert.match(syntaxSource, /\["csv", \["csv", "CSV"\]\]/);
 assert.match(prismLicense, /MIT LICENSE/i); assert.match(markedLicense, /MIT license/i); assert.match(dompurifyLicense, /Apache License/i); assert.match(mermaidLicense, /MIT License/i);
 assert.doesNotMatch(`${template}\n${syntaxSource}`, /https?:\/\//, "production template and syntax helper contain no remote URL");
+assert.match(rendererSource, /(?:title|filename)/); assert.match(rendererSource, /slice\(0, 512\)/); assert.match(fenceSource, /MAX_SOURCE/); assert.match(diffSource, /MAX_LINES/); assert.match(jsonSource, /MAX_NODES/); assert.match(csvSource, /MAX_CELLS/); assert.match(navigatorSource, /ResponseViewerNavigator/); assert.match(navigatorSource, /if \(needle\) \{[\s\S]*item\.folded === undefined/); assert.match(navigatorSource, /else \{[\s\S]*item\.folded = undefined/); assert.match(navigatorSource, /originalRange/); assert.doesNotMatch(navigatorSource, /ranges/); assert.match(exportSource, /createObjectURL/);
 assert.doesNotMatch(mermaidViewSource, /https?:\/\//, "mermaid wrapper contains no remote URL");
 // The SVG namespace URI is a required literal, not a fetched remote reference.
 assert.match(treeViewSource, /http:\/\/www\.w3\.org\/2000\/svg/, "tree icons use the standard SVG namespace");
+restoreChild(); process.removeListener("exit", restoreChild);
 console.log("PASS: response-viewer state, async spawn failure, bounded SSE, HTTP policy, links, lifecycle, viewer on/off, shutdown, and template shell");

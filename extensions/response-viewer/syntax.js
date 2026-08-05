@@ -9,7 +9,7 @@
     ["python", ["python", "Python"]], ["py", ["python", "Python"]],
     ["bash", ["bash", "Bash"]], ["sh", ["bash", "Bash"]], ["shell", ["bash", "Bash"]],
     ["yaml", ["yaml", "YAML"]], ["yml", ["yaml", "YAML"]],
-    ["json", ["json", "JSON"]], ["sql", ["sql", "SQL"]],
+    ["json", ["json", "JSON"]], ["diff", ["diff", "Diff"]], ["patch", ["diff", "Diff"]], ["csv", ["csv", "CSV"]], ["sql", ["sql", "SQL"]],
     ["hcl", ["hcl", "HCL"]], ["terraform", ["hcl", "HCL"]], ["tf", ["hcl", "HCL"]],
     ["docker", ["docker", "Dockerfile"]], ["dockerfile", ["docker", "Dockerfile"]],
     ["markdown", ["markdown", "Markdown"]], ["md", ["markdown", "Markdown"]],

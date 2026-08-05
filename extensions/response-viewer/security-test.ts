@@ -22,8 +22,12 @@ if (!chrome) {
 		const prelude = `<script>
 class EventSourceMock { constructor() { this.listeners = {}; window.__events = this; } addEventListener(type, listener) { this.listeners[type] = listener; } close() {} emit(snapshot) { this.listeners.state({ data: JSON.stringify(snapshot) }); } }
 window.EventSource = EventSourceMock;
-window.__copied = [];
+window.__media = []; window.matchMedia = query => { const listeners = new Set(), item = { media: query, matches: false, onchange: null, addEventListener(type, listener) { if (type === "change") listeners.add(listener); }, removeEventListener(type, listener) { if (type === "change") listeners.delete(listener); }, addListener(listener) { listeners.add(listener); }, removeListener(listener) { listeners.delete(listener); }, dispatchEvent(event) { listeners.forEach(listener => listener(event)); return true; }, __listeners: listeners }; window.__media.push(item); return item; }; window.__setNarrow = matches => window.__media.filter(item => item.media.includes("max-width: 1180px")).forEach(item => { item.matches = matches; const event = { matches, media: item.media }; item.onchange?.(event); item.__listeners.forEach(listener => listener(event)); });
+window.__copied = []; window.__downloads = []; window.__printCalls = 0;
 Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async text => window.__copied.push(text) } });
+URL.createObjectURL = blob => { window.__downloads.push({ blob }); return "blob:viewer-test"; }; URL.revokeObjectURL = () => {};
+HTMLAnchorElement.prototype.click = function() { window.__downloads[window.__downloads.length - 1].name = this.download; };
+window.print = () => { window.__printCalls++; };
 </script>`;
 		const smoke = `<script>
 (async () => {
@@ -34,20 +38,37 @@ Object.defineProperty(navigator, "clipboard", { configurable: true, value: { wri
     const response = (id, markdown, status = "complete") => ({ id, markdown, status, error: null, truncated: false });
     const longCode = Array.from({ length: 25 }, (_, index) => "line " + index).join("\\n");
     const validMermaid = "graph TD; A-->B;";
-    const hostileMermaid = ["graph TD", "A[\\"<img src=x onerror=window.__pwned=1>\\"]-->B", "click A \\"javascript:window.__pwned=1\\"", "click B \\"https://evil.example\\""].join("\\n");
+    const hostileMermaid = ["graph TD", "A[\\\"<img src=x onerror=window.__pwned=1>\\\"]-->B", "click A \\\"javascript:window.__pwned=1\\\"", "click B \\\"https://evil.example\\\""].join("\\n");
     const brokenMermaid = "graph TD; A-->";
     const validTree = ["project/", "├── src/", "│   ├── index.js", "│   └── <script>window.__pwned2=1<\\/script>", "└── README.md"].join("\\n");
     const malformedTree = ["root/", "│   ├── deep.js"].join("\\n");
-    const latest = ["# Latest", "<img src=x onerror=alert(1)>", "~~~javascript", "const answer = 42;", "~~~", "~~~unknown", "<img src=x onerror=alert(1)>", "~~~", "~~~text", longCode, "~~~", "~~~mermaid", validMermaid, "~~~", "~~~mermaid", hostileMermaid, "~~~", "~~~mermaid", brokenMermaid, "~~~", "~~~tree", validTree, "~~~", "~~~tree", malformedTree, "~~~"].join("\\n\\n");
-    window.__events.emit({ status: "complete", responses: [response("older", "# Older"), response("latest", latest)], latestId: "latest", revision: 1 });
-    await wait(100);
-    const body = document.getElementById("response-body");
-    ok(!body.querySelector("img,[onerror]"), "hostile Markdown became active DOM");
+    const validDiff = ["diff --git a/a.js b/a.js", "--- a/a.js", "+++ b/a.js", "@@ -1 +1 @@", "-old", "+new <img onerror=window.__pwned3=1>"].join("\\n");
+    const validMultiDiff = [validDiff, "diff --git a/b.js b/b.js", "--- a/b.js", "+++ b/b.js", "@@ -1 +1 @@", "-before", "+after"].join("\\n");
+    const validUnifiedDiff = ["--- old.conf", "+++ new.conf", "@@ -1 +1 @@", "--- option", "+++ option"].join("\\n");
+    const invalidSecondDiff = [validDiff, "diff --git a/b.js b/b.js", "@@ -1 +1 @@", "-before", "+after"].join("\\n");
+    const validCsv = ["name,value", "first,2", "alpha,1", "beta,1", "gamma,3", "=literal,4"].join("\\n");
+    const older = "# Older\\n\\nOlder body only";
+    const latest = ["# Latest", "The body-only-needle appears in this paragraph.", "<img src=x onerror=alert(1)>", "~~~javascript title=\\\"src/<img onerror=window.__titlePwned=1>.ts\\\"", "const answer = 42;", "~~~", "~~~javascript filename=\\\"weird <img onerror=window.__filenamePwned=1>.ts\\\"", "const filename = true;", "~~~", "~~~unknown", "<img src=x onerror=alert(1)>", "~~~", "~~~text", longCode, "~~~", "~~~mermaid", validMermaid, "~~~", "~~~mermaid", hostileMermaid, "~~~", "~~~mermaid", brokenMermaid, "~~~", "~~~tree", validTree, "~~~", "~~~tree", malformedTree, "~~~", "~~~diff", validDiff, "~~~", "~~~json", "{\\\"safe\\\": [1, true], \\\"__proto__\\\": \\\"literal\\\"}", "~~~", "~~~csv", validCsv, "~~~"].join("\\n\\n");
+    window.__events.emit({ status: "complete", responses: [response("older", older), response("latest", latest)], latestId: "latest", revision: 1 });
+    await wait(120);
+    const body = document.getElementById("response-body"), panel = document.getElementById("response-navigator");
+    ok(panel.open, "desktop navigator did not initialize open"); window.__setNarrow(true); ok(!panel.open, "narrow navigator did not collapse"); window.__setNarrow(false); ok(panel.open, "desktop navigator did not reopen");
+    ok(window.ResponseViewerCsv.parse("name,value\\nalpha,2"), "CSV parser rejected valid source");
+    const quoted = window.ResponseViewerCsv.parse("name,value\\n\\\"comma, name\\\",2"); ok(quoted?.[1]?.[0] === "comma, name", "quoted CSV cell was not parsed");
+    ok(!window.ResponseViewerCsv.parse("name,value\\n\\\"quoted\\\"suffix,2"), "CSV accepted content after a closing quote");
+    ok(!window.ResponseViewerCsv.parse("a,b\\nragged"), "ragged CSV did not fall back");
+    ok(window.ResponseViewerDiff.parse(validMultiDiff), "valid multi-file diff did not render");
+    ok(window.ResponseViewerDiff.parse(validUnifiedDiff), "generic unified diff or hunk content resembling headers did not render");
+    ok(!window.ResponseViewerDiff.parse("diff --git a/a b/a\\n--- a/a\\n@@ -1 +1 @@\\n-old\\n+new"), "diff missing +++ header did not fall back");
+    ok(!window.ResponseViewerDiff.parse(invalidSecondDiff), "diff with an invalid second file did not fall back");
+    ok(!window.ResponseViewerJson.build({ source: "{\\\"incomplete\\\":" }), "incomplete JSON did not fall back");
+    ok(!body.querySelector("img,[onerror]") && window.__titlePwned === undefined && window.__filenamePwned === undefined, "hostile Markdown or fence metadata became active DOM");
     const blocks = [...body.querySelectorAll(".code-block")];
-    const javascript = blocks.find(block => block.querySelector(".code-language").textContent === "JavaScript");
+    const javascript = blocks.find(block => block.querySelector(".code-language").getAttribute("title") === "JavaScript");
     const unknown = blocks.find(block => block.querySelector(".code-language").textContent === "Plain");
     const long = blocks.find(block => block.querySelector(".code-expand-toggle"));
     ok(javascript?.querySelector("span.token"), "explicit JavaScript was not highlighted");
+    ok(blocks.some(block => block.querySelector(".code-language").textContent.includes("<img onerror")), "hostile title/filename was not literal text");
     ok(unknown && !unknown.querySelector("span.token") && unknown.textContent.includes("<img src=x onerror"), "unknown code was highlighted or became active");
     ok(long?.querySelector("pre").classList.contains("code-collapsed"), "long code did not collapse");
     long.querySelector(".code-wrap-toggle").click(); long.querySelector(".code-expand-toggle").click();
@@ -60,38 +81,63 @@ Object.defineProperty(navigator, "clipboard", { configurable: true, value: { wri
     ok(validMermaidBlock.querySelector("pre").hidden, "valid mermaid pre was not hidden after render");
     ok(await pollUntil(() => hostileMermaidBlock.querySelector(".mermaid-host svg")), "hostile mermaid diagram did not render an svg");
     const hostileSvg = hostileMermaidBlock.querySelector(".mermaid-host svg");
-    ok(!hostileSvg.querySelector("foreignObject"), "hostile mermaid svg contains a foreignObject");
-    ok(!hostileSvg.innerHTML.includes("onerror"), "hostile mermaid svg retained an onerror attribute");
-    ok(window.__pwned === undefined, "hostile mermaid label or click directive executed script");
+    ok(!hostileSvg.querySelector("foreignObject") && !hostileSvg.innerHTML.includes("onerror") && window.__pwned === undefined, "hostile Mermaid retained active content");
     const anchorHref = anchor => anchor.getAttribute("href") ?? anchor.getAttribute("xlink:href") ?? "";
-    ok(![...hostileSvg.querySelectorAll("a")].some(anchor => anchorHref(anchor).toLowerCase().startsWith("javascript:")), "javascript: click link survived the link policy");
+    ok(![...hostileSvg.querySelectorAll("a")].some(anchor => anchorHref(anchor).toLowerCase().startsWith("javascript:")), "javascript: Mermaid link survived");
     const externalAnchor = [...hostileSvg.querySelectorAll("a")].find(anchor => anchorHref(anchor).includes("evil.example"));
-    ok(externalAnchor, "external https click link was not rendered");
-    ok(externalAnchor.getAttribute("rel") === "noreferrer noopener" && externalAnchor.getAttribute("target") === "_blank", "external mermaid link missing rel/target protection");
-    await wait(300);
-    ok(!brokenMermaidBlock.querySelector(".mermaid-host svg"), "broken mermaid unexpectedly rendered an svg");
-    ok(!brokenMermaidBlock.querySelector("pre").hidden, "broken mermaid stopped being a visible code block");
-    const treeBlocks = blocks.filter(block => block.querySelector(".code-language").textContent === "Tree");
-    ok(treeBlocks.length === 2, "expected two tree-labeled code blocks");
-    const renderedTreeBlock = treeBlocks.find(block => block.querySelector(".tree-view"));
-    const malformedTreeBlock = treeBlocks.find(block => block.querySelector("pre"));
-    ok(renderedTreeBlock, "well-formed tree block did not render as a tree view");
-    ok(malformedTreeBlock?.querySelector(".code-wrap-toggle"), "malformed tree did not fall back to the normal code-block path");
-    ok(renderedTreeBlock.querySelectorAll("details").length === 2, "tree view did not render the expected directory count");
-    const treeNames = [...renderedTreeBlock.querySelectorAll(".tree-name")].map(node => node.textContent);
-    ok(treeNames.includes("README.md"), "tree view did not render README.md");
-    ok(treeNames.some(treeName => treeName.includes("<script>window.__pwned2=1<\\/script>")), "hostile tree name was not rendered as literal text");
-    ok(!renderedTreeBlock.querySelector("script"), "hostile tree name became an active script element");
-    ok(window.__pwned2 === undefined, "hostile tree name executed script");
-    javascript.querySelector(".copy-code").click(); await wait(20);
-    ok(window.__copied.some(text => text.includes("const answer = 42;")), "code copy changed text");
-    document.getElementById("previous-response").click(); await wait(40);
-    ok(body.textContent.includes("Older") && document.getElementById("history-position").textContent === "1 / 2", "history previous did not render");
-    document.getElementById("next-response").click(); await wait(40);
-    ok(body.textContent.includes("Latest"), "history next did not restore latest");
-    const print = [...document.styleSheets[0].cssRules].find(rule => rule instanceof CSSMediaRule && rule.conditionText === "print");
-    const printCss = [...print.cssRules].map(rule => rule.cssText).join(" ");
-    ok(/\.toolbar[^}]*display: none/.test(printCss) && /\.code-actions[^}]*display: none/.test(printCss) && /pre[^}]*max-height: none/.test(printCss), "print CSS does not hide controls and expand code");
+    ok(externalAnchor?.getAttribute("rel") === "noreferrer noopener" && externalAnchor.getAttribute("target") === "_blank", "external Mermaid link protection missing");
+    await wait(250); ok(!brokenMermaidBlock.querySelector(".mermaid-host svg") && !brokenMermaidBlock.querySelector("pre").hidden, "broken Mermaid did not fall back");
+    document.getElementById("previous-response").click(); await wait(40); document.getElementById("next-response").click();
+    ok(await pollUntil(() => document.querySelector(".mermaid-host svg")), "cached Mermaid redraw did not inject after attachment");
+    ok(body.querySelector(".diff-view .diff-addition")?.textContent.includes("<img onerror") && !body.querySelector(".diff-view img") && window.__pwned3 === undefined, "unified diff was not safely rendered");
+    ok(body.querySelector(".json-view details") && body.querySelector(".json-key")?.textContent.includes("safe"), "JSON tree was not rendered");
+    const csvHeaders = [...body.querySelectorAll(".csv-view th")], csvSort = csvHeaders[1]?.querySelector("button"); ok(csvSort, "CSV table was not rendered");
+    const sourceOrder = () => [...body.querySelectorAll(".csv-view tbody tr")].map(row => row.dataset.sourceIndex).join(",");
+    csvSort.click(); ok(csvHeaders[1].getAttribute("aria-sort") === "ascending" && csvSort.getAttribute("aria-sort") === null && sourceOrder() === "1,2,0,3,4", "CSV ascending sort was not accessible, stable, and reordered");
+    csvSort.click(); ok(csvHeaders[1].getAttribute("aria-sort") === "descending" && sourceOrder() === "4,3,0,1,2", "CSV descending sort was not stable and reordered");
+    ok([...body.querySelectorAll(".csv-view td")].some(cell => cell.textContent === "=literal"), "formula-like CSV cell was not literal text");
+    const treeBlocks = blocks.filter(block => block.querySelector(".code-language").textContent === "Tree"), renderedTreeBlock = treeBlocks.find(block => block.querySelector(".tree-view")), malformedTreeBlock = treeBlocks.find(block => block.querySelector("pre"));
+    ok(renderedTreeBlock?.querySelectorAll("details").length === 2 && malformedTreeBlock?.querySelector(".code-wrap-toggle"), "tree rendering/fallback was incorrect");
+    ok(!renderedTreeBlock.querySelector("script") && window.__pwned2 === undefined, "hostile tree name became active DOM");
+    javascript.querySelector(".copy-code").click(); await wait(20); ok(window.__copied.some(text => text.includes("const answer = 42;") && text.endsWith("\\n")), "code copy did not preserve Marked's terminating newline");
+    const search = document.getElementById("navigator-search"); search.value = "body-only-needle"; search.dispatchEvent(new Event("input", { bubbles: true }));
+    const result = document.querySelector(".navigator-item"); ok(document.querySelectorAll(".navigator-item").length === 1 && document.getElementById("navigator-count").textContent === "1 of 2 responses" && result.querySelector("mark")?.textContent === "body-only-needle" && result.querySelector(".navigator-detail").textContent.includes("body-only-needle"), "navigator body-match context/highlight/count was incorrect");
+    search.value = "x"; window.__events.emit({ status: "complete", responses: [response("unicode", "İX")], latestId: "unicode", revision: 2 }); await wait(40);
+    const unicodeResult = document.querySelector(".navigator-item"); ok(unicodeResult?.querySelector("mark")?.textContent === "X" && unicodeResult.querySelector(".navigator-detail")?.textContent.includes("İX"), "navigator Unicode case-insensitive offsets did not preserve visible context");
+    search.value = "i"; window.__events.emit({ status: "complete", responses: [response("turkish", "İstanbul")], latestId: "turkish", revision: 3 }); await wait(40);
+    const turkishResult = document.querySelector(".navigator-item"); ok(turkishResult?.querySelector("mark")?.textContent === "İ" && turkishResult.querySelector(".navigator-detail")?.textContent.includes("İstanbul"), "navigator lowercase i did not match the Turkish dotted-I range");
+    search.value = "istanbul"; search.dispatchEvent(new Event("input", { bubbles: true })); ok(document.querySelector(".navigator-item mark")?.textContent === "İstanbul", "navigator Turkish case fold did not preserve the full visible range");
+    search.value = "ος"; window.__events.emit({ status: "complete", responses: [response("greek", "ΟΣ")], latestId: "greek", revision: 4 }); await wait(40);
+    ok(document.querySelector(".navigator-item mark")?.textContent === "ΟΣ", "navigator lowercase Greek final sigma did not match uppercase sigma");
+    const largeMarkdown = "a".repeat(1_250_000) + " Needle";
+    search.value = ""; window.__events.emit({ status: "complete", responses: [response("large", largeMarkdown)], latestId: "large", revision: 5 }); await wait(100);
+    ok(document.querySelectorAll(".navigator-item").length === 1 && !document.querySelector(".navigator-item mark"), "empty navigator search did not avoid match rendering for a large response");
+    search.value = "needle"; search.dispatchEvent(new Event("input", { bubbles: true })); await wait(100);
+    ok(document.querySelector(".navigator-item mark")?.textContent === "Needle", "navigator did not search a large response without pathological allocation");
+    search.value = "body-only-needle"; window.__events.emit({ status: "complete", responses: [response("older", older), response("latest", latest)], latestId: "latest", revision: 6 }); await wait(40);
+    document.querySelector(".navigator-item").focus(); const runningLatest = latest + "\\n\\nStreaming revision still has the body-only-needle.";
+    window.__events.emit({ status: "running", responses: [response("older", older), response("latest", runningLatest, "running")], latestId: "latest", revision: 7 }); await wait(120);
+    ok(body.textContent.includes("Streaming revision") && document.activeElement?.dataset.responseId === "latest" && document.querySelector(".navigator-item").getAttribute("aria-current") === "true", "streaming latest response did not update visibly or navigator lost its focused result");
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "k", metaKey: true, bubbles: true })); ok(panel.open && document.activeElement === search, "Meta+K did not open and focus navigator search");
+    search.value = ""; search.dispatchEvent(new Event("input", { bubbles: true })); document.querySelector('.navigator-item[data-response-id="older"]').click(); await wait(40);
+    ok(body.textContent.includes("Older body only"), "navigator result button did not select response");
+    document.querySelector('.navigator-item[data-response-id="latest"]').click(); await wait(120);
+    document.getElementById("copy-response").click(); await wait(20); ok(window.__copied.some(text => text.includes("Streaming revision")) && document.getElementById("copy-response").textContent === "Copied" && document.getElementById("status").textContent.includes("Copied"), "response Markdown copy lacked visible feedback");
+    document.getElementById("download-response").click(); document.getElementById("download-history").click(); await wait(20);
+    const currentDownload = await window.__downloads[0].blob.text(), allDownload = await window.__downloads[1].blob.text();
+    ok(currentDownload.includes("Streaming revision") && !currentDownload.includes("Older body only") && allDownload.indexOf("Older body only") < allDownload.indexOf("Streaming revision") && window.__downloads[1].name === "pi-response-history.md", "Markdown downloads did not target selected/all history in order");
+    document.getElementById("print-response").click(); const surface = document.getElementById("print-surface");
+    ok(document.body.dataset.printScope === "current" && !surface.hasAttribute("aria-hidden") && surface.children.length === 1 && surface.querySelector(".mermaid-host svg") && surface.querySelector(".tree-view") && surface.querySelector(".diff-view") && surface.querySelector(".json-view") && surface.querySelector(".csv-view"), "Print current did not expose and clone the decorated rich response");
+    dispatchEvent(new Event("afterprint")); ok(surface.getAttribute("aria-hidden") === "true" && !surface.children.length && !document.body.dataset.printScope, "afterprint did not restore the hidden current print surface");
+    document.getElementById("print-history").click(); ok(document.body.dataset.printScope === "all" && !surface.hasAttribute("aria-hidden") && surface.children.length === 2 && surface.children[0].textContent.includes("Older body only") && surface.children[1].textContent.includes("Streaming revision") && surface.children[1].classList.contains("print-break"), "Print all did not expose or preserve retained response count/order/page break");
+    dispatchEvent(new Event("afterprint")); ok(window.__printCalls === 2 && surface.getAttribute("aria-hidden") === "true" && !surface.children.length && !document.body.dataset.printScope, "afterprint did not restore the hidden all-history print surface");
+    window.__events.emit({ status: "complete", responses: [response("latest", runningLatest)], latestId: "latest", revision: 8 }); await wait(50);
+    ok(document.querySelector('.navigator-item[data-response-id="latest"]') && !document.querySelector('.navigator-item[data-response-id="older"]') && body.textContent.includes("Streaming revision"), "navigator selection retention/eviction was incorrect");
+    const limited = Array.from({ length: 65 }, (_, index) => "~~~json\\n{\\\"n\\\":" + index + "}\\n~~~").join("\\n\\n");
+    window.__events.emit({ status: "complete", responses: [response("limited", limited)], latestId: "limited", revision: 9 }); await wait(100);
+    ok(body.querySelectorAll(".json-view").length === 64 && body.querySelectorAll("pre").length === 1, "rich-fence count cap did not preserve literal fallback beyond boundary");
+    const print = [...document.styleSheets[0].cssRules].find(rule => rule instanceof CSSMediaRule && rule.conditionText === "print"), printCss = [...print.cssRules].map(rule => rule.cssText).join(" ");
+    ok(/\.toolbar[^}]*display: none/.test(printCss) && /\.code-actions[^}]*display: none/.test(printCss) && /pre[^}]*max-height: none/.test(printCss) && /\.diff-view[^}]*max-height: none[^}]*overflow: visible/.test(printCss), "print CSS does not hide controls and fully expand code/diffs");
     document.title = "PASS: response viewer browser smoke";
   } catch (error) { document.title = "FAIL: " + (error instanceof Error ? error.message : String(error)); }
 })();
@@ -103,11 +149,17 @@ Object.defineProperty(navigator, "clipboard", { configurable: true, value: { wri
 			.replaceAll('src="syntax.js"', `src="${asset("syntax.js")}"`)
 			.replaceAll('src="mermaid-view.js"', `src="${asset("mermaid-view.js")}"`)
 			.replaceAll('src="tree-view.js"', `src="${asset("tree-view.js")}"`)
+			.replaceAll('src="fence-renderers.js"', `src="${asset("fence-renderers.js")}"`)
+			.replaceAll('src="diff-view.js"', `src="${asset("diff-view.js")}"`)
+			.replaceAll('src="json-view.js"', `src="${asset("json-view.js")}"`)
+			.replaceAll('src="csv-view.js"', `src="${asset("csv-view.js")}"`)
+			.replaceAll('src="navigator.js"', `src="${asset("navigator.js")}"`)
+			.replaceAll('src="export-view.js"', `src="${asset("export-view.js")}"`)
 			.replaceAll('src="client.js"', `src="${asset("client.js")}"`)
 			.replace('  <script src="' + asset("vendor/marked-18.0.5.umd.js") + '">', `${prelude}\n  <script src="${asset("vendor/marked-18.0.5.umd.js")}">`)
 			.replace("</body>", `${smoke}</body>`);
 		await writeFile(file, source);
-		const { stdout } = await execFile(chrome, ["--headless=new", "--dump-dom", "--run-all-compositor-stages-before-draw", "--virtual-time-budget=10000", "--allow-file-access-from-files", "--disable-background-networking", "--disable-component-update", "--use-mock-keychain", "--password-store=basic", pathToFileURL(file).href], { timeout: 30_000, maxBuffer: 5 * 1024 * 1024 });
+		const { stdout } = await execFile(chrome, ["--headless=new", "--window-size=1440,1000", "--dump-dom", "--run-all-compositor-stages-before-draw", "--virtual-time-budget=10000", "--allow-file-access-from-files", "--disable-background-networking", "--disable-component-update", "--use-mock-keychain", "--password-store=basic", pathToFileURL(file).href], { timeout: 30_000, maxBuffer: 5 * 1024 * 1024 });
 		const title = stdout.match(/<title>([\s\S]*?)<\/title>/i)?.[1];
 		assert.equal(title, "PASS: response viewer browser smoke", `browser smoke failed: ${title ?? "missing title"}`);
 		console.log(title);

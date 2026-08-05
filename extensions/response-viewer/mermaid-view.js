@@ -27,7 +27,12 @@
     hostSource.set(host, source);
     hostPre.set(host, pre);
     const theme = ensureInitialized(), key = `${theme} ${source}`, at = epoch;
-    if (cache.has(key)) { const cached = cache.get(key); if (cached !== false) inject(host, pre, cached, at); return; }
+    if (cache.has(key)) {
+      const cached = cache.get(key);
+      // build() runs before its host is attached; retry after that synchronous DOM work.
+      if (cached !== false) queueMicrotask(() => inject(host, pre, cached, at));
+      return;
+    }
     const id = `rv-mermaid-${++counter}`;
     try {
       const ok = await mermaid.parse(source, { suppressErrors: true });
@@ -51,5 +56,12 @@
       if (source !== undefined && pre) render(source, host, pre);
     });
   };
-  window.ResponseViewerMermaid = { render, onThemeChange };
+  const build = ({ source, pre }) => {
+    const host = document.createElement("div");
+    host.className = "mermaid-host"; host.hidden = true;
+    render(source, host, pre);
+    return { nodes: [pre, host] };
+  };
+  window.ResponseViewerMermaid = { render, onThemeChange, build };
+  window.ResponseViewerFences.register("mermaid", build);
 })();

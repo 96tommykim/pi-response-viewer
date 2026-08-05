@@ -69,4 +69,9 @@
     return fragment;
   };
   window.ResponseViewerTree = { build };
+  window.ResponseViewerFences.register("tree", context => {
+    const tree = build(context.source); if (!tree) return null;
+    const view = document.createElement("div"); view.className = "tree-view"; view.append(tree);
+    return { nodes: [view] };
+  });
 })();
