@@ -69,6 +69,17 @@
     pre.code-wrapped { overflow-x:hidden; white-space:pre-wrap; overflow-wrap:anywhere; word-break:break-word; }
     pre code { padding:0; color:inherit; border:0; background:none; }
     pre code .token.comment { color:var(--dim); } pre code .token.string,.token.template-string { color:var(--yellow); } pre code .token.keyword,.token.operator,.token.punctuation { color:var(--red); } pre code .token.function,.token.class-name { color:var(--green); } pre code .token.number,.token.boolean,.token.property { color:var(--purple); }
+    .mermaid-host { padding:20px; text-align:center; overflow-x:auto; }
+    .mermaid-host svg { max-width:100%; height:auto; }
+    .tree-view { padding:14px 18px; overflow-x:auto; color:var(--text); font:13px/1.65 var(--mono); }
+    .tree-view ul { list-style:none; margin:0; padding-left:1.1em; border-left:1px solid var(--border); }
+    .tree-view > ul.tree-root { padding-left:0; border-left:0; }
+    .tree-view li { margin:.15em 0; }
+    .tree-view summary { display:flex; align-items:center; gap:5px; cursor:pointer; list-style:none; }
+    .tree-view summary::-webkit-details-marker { display:none; }
+    .tree-view summary::before { content:"▸"; display:inline-block; width:1em; color:var(--dim); transition:transform .1s ease; }
+    .tree-view details[open] > summary::before { transform:rotate(90deg); }
+    .tree-icon { width:1em; height:1em; flex:0 0 auto; vertical-align:middle; opacity:.7; }
     .table-wrap { overflow:auto; margin:26px 0; border:1px solid var(--border); border-radius:8px; }
     table { width:100%; min-width:660px; border-collapse:collapse; font-size:13px; }
     th,td { padding:11px 14px; border-bottom:1px solid var(--border); text-align:left; vertical-align:top; }
@@ -116,6 +127,7 @@
   <div class="sr-only" id="status" aria-live="polite" aria-atomic="true"></div>
   <script src="vendor/marked-18.0.5.umd.js"></script>
   <script src="vendor/dompurify-3.4.12.min.js"></script>
+  <script src="vendor/mermaid-11.16.1.min.js"></script>
   <script src="vendor/prism-core-1.30.0.min.js"></script>
   <script src="vendor/prism-markup-1.30.0.min.js"></script>
   <script src="vendor/prism-clike-1.30.0.min.js"></script>
@@ -133,6 +145,8 @@
   <script src="link-policy.js"></script>
   <script src="renderer.js"></script>
   <script src="syntax.js"></script>
+  <script src="mermaid-view.js"></script>
+  <script src="tree-view.js"></script>
   <script src="client.js"></script>
 </body>
 </html>

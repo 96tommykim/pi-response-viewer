@@ -233,17 +233,85 @@ await disabledHandlers.get("session_start")!({}, tuiContext); await disabledHand
 assert.equal(disabledStarts, 0); assert.equal(disabledLaunches, 0, "non-TUI and child runs have no server or browser");
 if (savedChild === undefined) delete process.env.PI_SUBAGENT_CHILD; else process.env.PI_SUBAGENT_CHILD = savedChild;
 
+// /viewer on|off toggles the viewer for the current session; other event handlers are unaffected.
+const toggleHandlers = new Map<string, (event: unknown, ctx: unknown) => unknown>();
+let toggleCommand: { handler: (args: string, ctx: unknown) => Promise<void> } | undefined;
+const togglePi = {
+	on(event: string, handler: (event: unknown, ctx: unknown) => unknown) { toggleHandlers.set(event, handler); },
+	registerCommand(_name: string, command: { handler: (args: string, ctx: unknown) => Promise<void> }) { toggleCommand = command; },
+};
+const toggleServers: Array<ViewerServer & { publishes: Array<{ snapshot: ViewerSnapshot; immediate: boolean }>; closes: number }> = [];
+const toggleLaunches: string[] = [];
+const toggleNotifications: Array<{ text: string; level?: string }> = [];
+const toggleDependencies: Partial<ViewerDependencies> = {
+	directory: here,
+	launchViewer: url => toggleLaunches.push(url),
+	startServer: async (_directory, getState) => {
+		const fake = {
+			url: `http://127.0.0.1/toggle-${toggleServers.length}`,
+			publishes: [] as Array<{ snapshot: ViewerSnapshot; immediate: boolean }>,
+			closes: 0,
+			publish(next: ViewerSnapshot, immediate = false) { this.publishes.push({ snapshot: next, immediate }); },
+			async close() { this.closes += 1; },
+		};
+		void getState();
+		toggleServers.push(fake);
+		return fake;
+	},
+};
+createResponseViewer(togglePi as unknown as ExtensionAPI, toggleDependencies);
+const toggleBranch: unknown[] = [{ message: textMessage("toggle-restored") }];
+const toggleContext = { mode: "tui", sessionManager: { getBranch: () => toggleBranch }, ui: { notify: (text: string, level?: string) => toggleNotifications.push({ text, level }) } };
+const toggleFire = async (event: string, payload: unknown, context: unknown) => { const handler = toggleHandlers.get(event); assert.ok(handler, `missing ${event}`); await handler(payload, context); };
+await toggleFire("session_start", {}, toggleContext);
+assert.equal(toggleServers.length, 1, "session_start opens the first viewer server");
+
+// /viewer off closes the server and stops publishing for the rest of the session.
+await toggleCommand!.handler("off", toggleContext);
+assert.equal(toggleServers[0].closes, 1, "/viewer off closes the running server");
+assert.equal(toggleNotifications.at(-1)?.text, "Response viewer disabled for this session.");
+const publishesBeforeDisabledUpdate = toggleServers[0].publishes.length;
+await toggleFire("message_update", { message: textMessage("must not publish while disabled") }, toggleContext);
+assert.equal(toggleServers[0].publishes.length, publishesBeforeDisabledUpdate, "a disabled viewer does not publish on message_update");
+
+// /viewer on after off restarts the server, restores history, and opens the new URL.
+await toggleCommand!.handler("on", toggleContext);
+assert.equal(toggleServers.length, 2, "/viewer on starts a fresh server");
+assert.equal(latestResponse(toggleServers[1].publishes.at(-1)!.snapshot)?.markdown, "toggle-restored", "/viewer on restores history");
+assert.deepEqual(toggleLaunches, [toggleServers[1].url], "/viewer on opens the browser at the new URL");
+
+// bare /viewer while off behaves exactly like /viewer on.
+await toggleCommand!.handler("off", toggleContext);
+assert.equal(toggleServers[1].closes, 1);
+await toggleCommand!.handler("", toggleContext);
+assert.equal(toggleServers.length, 3, "bare /viewer while off starts a new server just like /viewer on");
+assert.deepEqual(toggleLaunches, [toggleServers[1].url, toggleServers[2].url]);
+
+// An unknown argument only reports usage; the running server is untouched.
+await toggleCommand!.handler("bogus", toggleContext);
+assert.equal(toggleServers.length, 3, "unknown argument does not start another server");
+assert.equal(toggleServers[2].closes, 0, "unknown argument leaves the running server open");
+assert.equal(toggleNotifications.at(-1)?.text, "Usage: /viewer [on|off]");
+assert.deepEqual(toggleLaunches, [toggleServers[1].url, toggleServers[2].url], "unknown argument does not open the browser");
+await toggleFire("session_shutdown", {}, toggleContext);
+
 const template = await readFile(join(here, "template.html"), "utf8");
 const client = await readFile(join(here, "client.js"), "utf8");
 const syntaxSource = await readFile(join(here, "syntax.js"), "utf8");
+const mermaidViewSource = await readFile(join(here, "mermaid-view.js"), "utf8");
+const treeViewSource = await readFile(join(here, "tree-view.js"), "utf8");
 const prismLicense = await readFile(join(here, "vendor", "LICENSE-prism.txt"), "utf8");
 const markedLicense = await readFile(join(here, "vendor", "LICENSE-marked.txt"), "utf8");
 const dompurifyLicense = await readFile(join(here, "vendor", "LICENSE-dompurify.txt"), "utf8");
+const mermaidLicense = await readFile(join(here, "vendor", "LICENSE-mermaid.txt"), "utf8");
 assert.doesNotMatch(template, /composer|static-raw|@font-face|\.woff2/i);
 assert.doesNotMatch(template, /https?:\/\//i);
 assert.match(template, /Pretendard,"Apple SD Gothic Neo"/);
 assert.match(template, /--mono:ui-monospace/);
 assert.match(template, /vendor\/marked-18\.0\.5\.umd\.js/);
+assert.match(template, /vendor\/mermaid-11\.16\.1\.min\.js/);
+assert.match(template, /<script src="mermaid-view\.js">/);
+assert.match(template, /<script src="tree-view\.js">/);
 assert.match(template, /@media print/);
 assert.match(template, /\.toolbar,.outline,.new-content,.heading-link,.sr-only,.code-actions \{ display:none !important;/);
 assert.match(template, /pre,pre\.code-collapsed,pre\.code-wrapped \{ max-height:none !important;/);
@@ -251,8 +319,16 @@ assert.match(client, /events\.close\(\)/);
 assert.match(client, /copy\(plain, copyButton\)/);
 assert.match(client, /codePreferences/);
 assert.match(client, /selectedId/);
+assert.match(client, /ResponseViewerMermaid\.render\(plain, host, pre\)/);
+assert.match(client, /ResponseViewerTree\.build\(plain\)/);
+assert.match(client, /ResponseViewerMermaid\.onThemeChange\(\)/);
 assert.match(syntaxSource, /Prism\.manual/);
 assert.match(syntaxSource, /ALLOWED_TAGS: \["span"\]/);
-assert.match(prismLicense, /MIT LICENSE/i); assert.match(markedLicense, /MIT license/i); assert.match(dompurifyLicense, /Apache License/i);
+assert.match(syntaxSource, /\["mermaid", \["mermaid", "Mermaid"\]\]/);
+assert.match(syntaxSource, /\["tree", \["tree", "Tree"\]\]/);
+assert.match(prismLicense, /MIT LICENSE/i); assert.match(markedLicense, /MIT license/i); assert.match(dompurifyLicense, /Apache License/i); assert.match(mermaidLicense, /MIT License/i);
 assert.doesNotMatch(`${template}\n${syntaxSource}`, /https?:\/\//, "production template and syntax helper contain no remote URL");
-console.log("PASS: response-viewer state, async spawn failure, bounded SSE, HTTP policy, links, lifecycle, shutdown, and template shell");
+assert.doesNotMatch(mermaidViewSource, /https?:\/\//, "mermaid wrapper contains no remote URL");
+// The SVG namespace URI is a required literal, not a fetched remote reference.
+assert.match(treeViewSource, /http:\/\/www\.w3\.org\/2000\/svg/, "tree icons use the standard SVG namespace");
+console.log("PASS: response-viewer state, async spawn failure, bounded SSE, HTTP policy, links, lifecycle, viewer on/off, shutdown, and template shell");

@@ -60,17 +60,7 @@ export function createResponseViewer(pi: ExtensionAPI, supplied: Partial<ViewerD
 		state.restore(history ? responseHistory(history) : []);
 		publish(true);
 	};
-
-	pi.registerCommand("viewer", {
-		description: "Open the current response viewer",
-		handler: async (_args, ctx) => {
-			if (!viewerEnabled(ctx)) return;
-			if (!server) { ctx.ui?.notify?.("Response viewer is unavailable for this session.", "warning"); return; }
-			dependencies.launchViewer(server.url);
-		},
-	});
-	pi.on("session_start", async (_event, ctx) => {
-		await close(); // Defensive for reload-like test and host lifecycles that reissue start.
+	const start = async (ctx: ModeContext) => {
 		enabled = viewerEnabled(ctx);
 		browser.opened = false;
 		if (!enabled) return;
@@ -80,6 +70,32 @@ export function createResponseViewer(pi: ExtensionAPI, supplied: Partial<ViewerD
 			server = await dependencies.startServer(dependencies.directory, () => state.snapshot());
 			publish(true);
 		} catch { ctx.ui?.notify?.("Response viewer could not start; terminal output remains available.", "warning"); }
+	};
+
+	pi.registerCommand("viewer", {
+		description: "Open the response viewer (on|off to enable or disable)",
+		handler: async (args, ctx) => {
+			const token = args.trim().split(/\s+/)[0].toLowerCase();
+			if (token === "off") {
+				enabled = false;
+				await close();
+				ctx.ui?.notify?.("Response viewer disabled for this session.", "info");
+				return;
+			}
+			if (token === "on" || token === "") {
+				if (!viewerEnabled(ctx)) { ctx.ui?.notify?.("Response viewer is unavailable for this session.", "warning"); return; }
+				const running = server;
+				if (running) { dependencies.launchViewer(running.url); return; }
+				await start(ctx);
+				if (server) dependencies.launchViewer(server.url);
+				return;
+			}
+			ctx.ui?.notify?.("Usage: /viewer [on|off]", "warning");
+		},
+	});
+	pi.on("session_start", async (_event, ctx) => {
+		await close(); // Defensive for reload-like test and host lifecycles that reissue start.
+		await start(ctx);
 	});
 	pi.on("before_agent_start", (_event, ctx) => {
 		if (!enabled || !viewerEnabled(ctx)) return;

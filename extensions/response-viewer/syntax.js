@@ -13,6 +13,8 @@
     ["hcl", ["hcl", "HCL"]], ["terraform", ["hcl", "HCL"]], ["tf", ["hcl", "HCL"]],
     ["docker", ["docker", "Dockerfile"]], ["dockerfile", ["docker", "Dockerfile"]],
     ["markdown", ["markdown", "Markdown"]], ["md", ["markdown", "Markdown"]],
+    ["mermaid", ["mermaid", "Mermaid"]],
+    ["tree", ["tree", "Tree"]],
   ]);
   const info = value => aliases.get(String(value || "").trim().toLocaleLowerCase()) || null;
   const languageFromCode = code => {

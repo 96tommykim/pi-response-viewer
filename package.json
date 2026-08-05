@@ -29,6 +29,8 @@
     "extensions/response-viewer/link-policy.js",
     "extensions/response-viewer/renderer.js",
     "extensions/response-viewer/syntax.js",
+    "extensions/response-viewer/mermaid-view.js",
+    "extensions/response-viewer/tree-view.js",
     "extensions/response-viewer/template.html",
     "extensions/response-viewer/vendor/*.js",
     "extensions/response-viewer/vendor/LICENSE-*.txt"

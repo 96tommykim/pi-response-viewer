@@ -105,9 +105,12 @@ export async function startViewerServer(directory: string, getState: () => Viewe
 		["/link-policy.js", { body: await readFile(join(directory, "link-policy.js")), type: "text/javascript; charset=utf-8" }],
 		["/renderer.js", { body: await readFile(join(directory, "renderer.js")), type: "text/javascript; charset=utf-8" }],
 		["/syntax.js", { body: await readFile(join(directory, "syntax.js")), type: "text/javascript; charset=utf-8" }],
+		["/mermaid-view.js", { body: await readFile(join(directory, "mermaid-view.js")), type: "text/javascript; charset=utf-8" }],
+		["/tree-view.js", { body: await readFile(join(directory, "tree-view.js")), type: "text/javascript; charset=utf-8" }],
 		...await Promise.all(["prism-core", "prism-markup", "prism-clike", "prism-javascript", "prism-typescript", "prism-go", "prism-python", "prism-bash", "prism-yaml", "prism-json", "prism-sql", "prism-hcl", "prism-docker", "prism-markdown"].map(async name => [`/vendor/${name}-1.30.0.min.js`, { body: await readFile(join(directory, "vendor", `${name}-1.30.0.min.js`)), type: "text/javascript; charset=utf-8" }] as const)),
 		["/vendor/marked-18.0.5.umd.js", { body: await readFile(join(directory, "vendor/marked-18.0.5.umd.js")), type: "text/javascript; charset=utf-8" }],
 		["/vendor/dompurify-3.4.12.min.js", { body: await readFile(join(directory, "vendor/dompurify-3.4.12.min.js")), type: "text/javascript; charset=utf-8" }],
+		["/vendor/mermaid-11.16.1.min.js", { body: await readFile(join(directory, "vendor/mermaid-11.16.1.min.js")), type: "text/javascript; charset=utf-8" }],
 	]);
 	const clients = new SseClients();
 	const sockets = new Set<Socket>();
