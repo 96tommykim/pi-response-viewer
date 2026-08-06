@@ -15,6 +15,8 @@
     ["markdown", ["markdown", "Markdown"]], ["md", ["markdown", "Markdown"]],
     ["mermaid", ["mermaid", "Mermaid"]],
     ["tree", ["tree", "Tree"]],
+    ["pi-tool", ["pi-tool", "Tool"]],
+    ["pi-think", ["pi-think", "Thinking"]],
   ]);
   const info = value => aliases.get(String(value || "").trim().toLocaleLowerCase()) || null;
   const languageFromCode = code => {

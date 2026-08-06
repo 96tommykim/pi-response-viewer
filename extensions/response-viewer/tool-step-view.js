@@ -1,13 +1,18 @@
 /* Tool step chips. Every value is inserted as a text node; nothing here is parsed as markup. */
 (() => {
-  const MAX_RESULT = 16 * 1024;
+  // Node caps a raw tool result at 8 KiB, but JSON.stringify expands control bytes
+  // (e.g. ANSI escapes in coloured command output) roughly 6x, so the browser-side
+  // cap on the serialized payload must be larger than the Node-side raw-text cap.
+  const MAX_RESULT = 64 * 1024;
   const GLYPH = { running: "⏳", ok: "✓", error: "✗" };
   const payloadOf = source => {
     if (typeof source !== "string" || source.length > MAX_RESULT) return null;
+    const nonce = window.ResponseViewerNonce;
+    if (typeof nonce !== "string" || !nonce) return null;
     try {
       const value = JSON.parse(source);
       if (!value || typeof value !== "object") return null;
-      if (value.nonce !== window.ResponseViewerNonce) return null;
+      if (value.nonce !== nonce) return null;
       if (value.status !== "running" && value.status !== "ok" && value.status !== "error") return null;
       return value;
     } catch { return null; }
@@ -37,7 +42,7 @@
       const details = document.createElement("details");
       details.className = "tool-step-result";
       const label = document.createElement("summary");
-      label.textContent = step.truncated ? "Result (truncated, see terminal)" : "Result";
+      label.textContent = step.truncated === true ? "Result (truncated, see terminal)" : "Result";
       const body = document.createElement("pre");
       body.textContent = result;
       details.append(label, body);

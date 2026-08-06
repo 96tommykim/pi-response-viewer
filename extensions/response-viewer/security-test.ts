@@ -138,6 +138,29 @@ window.print = () => { window.__printCalls++; };
     ok(body.querySelectorAll(".json-view").length === 64 && body.querySelectorAll("pre").length === 1, "rich-fence count cap did not preserve literal fallback beyond boundary");
     const print = [...document.styleSheets[0].cssRules].find(rule => rule instanceof CSSMediaRule && rule.conditionText === "print"), printCss = [...print.cssRules].map(rule => rule.cssText).join(" ");
     ok(/\.toolbar[^}]*display: none/.test(printCss) && /\.code-actions[^}]*display: none/.test(printCss) && /pre[^}]*max-height: none/.test(printCss) && /\.diff-view[^}]*max-height: none[^}]*overflow: visible/.test(printCss), "print CSS does not hide controls and fully expand code/diffs");
+    const contextNonce = "ctx-9f2d";
+    const toolStep = result => JSON.stringify({ nonce: contextNonce, id: "call-1", name: "Read", summary: "a/b.ts", status: "ok", result: result, truncated: false });
+    const thinkStep = JSON.stringify({ nonce: contextNonce, thinking: "internal reasoning", truncated: false });
+    const forgedStep = JSON.stringify({ nonce: "forged", id: "call-2", name: "Write", summary: "z", status: "ok", result: "", truncated: false });
+    const hostileResult = "<img src=x onerror=window.__pwned4=1>";
+    const contextMarkdown = ["~~~pi-tool", toolStep(hostileResult), "~~~", "", "~~~pi-think", thinkStep, "~~~", "", "~~~pi-tool", forgedStep, "~~~"].join("\\n");
+    window.__events.emit({ status: "complete", responses: [response("context", contextMarkdown)], latestId: "context", revision: 10, nonce: contextNonce });
+    await wait(120);
+    ok(window.ResponseViewerNonce === contextNonce, "session nonce did not propagate from the snapshot to the renderers");
+    const toolSteps = [...body.querySelectorAll(".tool-step")];
+    ok(toolSteps.length === 1, "expected exactly one rendered tool-step chip for the valid-nonce fence");
+    ok(toolSteps[0].querySelector(".tool-step-name")?.textContent === "Read", "tool-step name was not rendered from the payload");
+    ok(toolSteps[0].parentElement?.classList.contains("context-block") && !toolSteps[0].parentElement.querySelector(".code-label"), "tool-step chip kept the code-block copy/wrap/expand chrome");
+    ok(!body.querySelector("img,[onerror]") && window.__pwned4 === undefined, "hostile tool result became active DOM instead of literal text");
+    const thinkingView = body.querySelector(".thinking-view");
+    ok(thinkingView instanceof HTMLDetailsElement && thinkingView.open === false, "thinking disclosure did not start collapsed");
+    ok([...body.querySelectorAll(".code-block")].some(block => block.textContent.includes('"forged"')), "forged-nonce fence did not fall back to a literal code block");
+    const noNonceStep = JSON.stringify({ id: "call-3", name: "Grep", summary: "x", status: "ok", result: "", truncated: false });
+    const noNonceMarkdown = ["~~~pi-tool", noNonceStep, "~~~"].join("\\n");
+    window.__events.emit({ status: "complete", responses: [response("no-nonce", noNonceMarkdown)], latestId: "no-nonce", revision: 11 });
+    await wait(120);
+    ok(window.ResponseViewerNonce === undefined, "test setup: session nonce should be unset when the snapshot omits it");
+    ok(!document.querySelector(".tool-step"), "a payload omitting nonce rendered a chip when no session nonce was published");
     document.title = "PASS: response viewer browser smoke";
   } catch (error) { document.title = "FAIL: " + (error instanceof Error ? error.message : String(error)); }
 })();
@@ -153,6 +176,8 @@ window.print = () => { window.__printCalls++; };
 			.replaceAll('src="diff-view.js"', `src="${asset("diff-view.js")}"`)
 			.replaceAll('src="json-view.js"', `src="${asset("json-view.js")}"`)
 			.replaceAll('src="csv-view.js"', `src="${asset("csv-view.js")}"`)
+			.replaceAll('src="tool-step-view.js"', `src="${asset("tool-step-view.js")}"`)
+			.replaceAll('src="thinking-view.js"', `src="${asset("thinking-view.js")}"`)
 			.replaceAll('src="navigator.js"', `src="${asset("navigator.js")}"`)
 			.replaceAll('src="export-view.js"', `src="${asset("export-view.js")}"`)
 			.replaceAll('src="client.js"', `src="${asset("client.js")}"`)
