@@ -7,7 +7,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runInNewContext } from "node:vm";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { assistantText, closeOpenFence, contentSegments, MAX_RESPONSE_BYTES, MAX_RESPONSES, parseToolStep, PROMPT_BYTES, responseHistory, SEGMENT_SEPARATOR, summarizeArguments, THINKING_BYTES, thinkingSegment, toolResultText, toolStepSegment, ViewerState, type ViewerSnapshot } from "./state.ts";
+import { assistantText, closeOpenFence, contentSegments, findToolStep, MAX_RESPONSE_BYTES, MAX_RESPONSES, parseToolStep, PROMPT_BYTES, responseHistory, SEGMENT_SEPARATOR, summarizeArguments, THINKING_BYTES, thinkingSegment, toolResultText, toolStepSegment, ViewerState, type ViewerSnapshot } from "./state.ts";
 import { SseClients, startViewerServer, type SseResponse, type ViewerServer } from "./server.ts";
 import { createResponseViewer, openCommand, openOnce, openViewer, viewerEnabled, type ViewerDependencies } from "./index.ts";
 
@@ -38,13 +38,13 @@ assert.equal(summarizeArguments({ weird: 3 }), '{"weird":3}', "unknown shapes fa
 assert.equal(summarizeArguments(undefined), "{}");
 assert.equal(summarizeArguments({ command: "x".repeat(200) }), `${"x".repeat(120)}…`, "summary is cut at SUMMARY_CHARS");
 
-const stepSegment = toolStepSegment(NONCE, { name: "Read", summary: "a.ts", status: "running", result: "", truncated: false });
+const stepSegment = toolStepSegment(NONCE, { id: "call-1", name: "Read", summary: "a.ts", status: "running", result: "", truncated: false });
 assert.equal(stepSegment.split("\n").length, 3, "fence payload is a single line");
-assert.deepEqual(parseToolStep(stepSegment, NONCE), { name: "Read", summary: "a.ts", status: "running", result: "", truncated: false });
+assert.deepEqual(parseToolStep(stepSegment, NONCE), { id: "call-1", name: "Read", summary: "a.ts", status: "running", result: "", truncated: false });
 assert.equal(parseToolStep(stepSegment, "other-nonce"), null, "a foreign nonce does not parse");
 assert.equal(parseToolStep("```pi-tool\nnot json\n```", NONCE), null, "malformed payload does not parse");
 
-const backtickStep = toolStepSegment(NONCE, { name: "Bash", summary: "echo", status: "ok", result: "```\nrm -rf /\n```", truncated: false });
+const backtickStep = toolStepSegment(NONCE, { id: "b1", name: "Bash", summary: "echo", status: "ok", result: "```\nrm -rf /\n```", truncated: false });
 assert.equal(closeOpenFence(backtickStep), backtickStep, "a result containing fences does not leave the segment open");
 
 const converted = contentSegments({
@@ -55,13 +55,22 @@ const converted = contentSegments({
 		{ type: "toolCall", id: "call-1", name: "Read", arguments: { file_path: "a.ts" } },
 	],
 }, NONCE);
-assert.equal(converted.segments.length, 3, "each content block becomes one segment");
-assert.deepEqual(converted.toolCallIds, [undefined, undefined, "call-1"], "source order is preserved");
-assert.match(converted.segments[0], /^```pi-think\n/);
-assert.equal(converted.segments[1], "answer");
-assert.equal(parseToolStep(converted.segments[2], NONCE)?.summary, "a.ts");
-assert.deepEqual(contentSegments({ role: "assistant", content: [{ type: "text", text: "   " }] }, NONCE).segments, [], "blank text produces no segment");
-assert.deepEqual(contentSegments(undefined, NONCE).segments, [], "a missing message produces no segment");
+assert.equal(converted.length, 3, "each content block becomes one segment, in source order");
+assert.match(converted[0], /^```pi-think\n/);
+assert.equal(converted[1], "answer");
+assert.equal(parseToolStep(converted[2], NONCE)?.summary, "a.ts");
+assert.equal(parseToolStep(converted[2], NONCE)?.id, "call-1", "the tool-call id travels in the payload");
+assert.deepEqual(contentSegments({ role: "assistant", content: [{ type: "text", text: "   " }] }, NONCE), [], "blank text produces no segment");
+assert.deepEqual(contentSegments(undefined, NONCE), [], "a missing message produces no segment");
+
+// A step is located by id, never by a stored index — fitSegments shifts the array out from under one.
+const stepList = [contentSegments({ role: "assistant", content: [{ type: "toolCall", id: "a", name: "Read", arguments: {} }] }, NONCE)[0], "prose", contentSegments({ role: "assistant", content: [{ type: "toolCall", id: "b", name: "Bash", arguments: {} }] }, NONCE)[0]];
+assert.equal(findToolStep(stepList, "a", NONCE), 0);
+assert.equal(findToolStep(stepList, "b", NONCE), 2);
+assert.equal(findToolStep(stepList, "missing", NONCE), -1);
+assert.equal(findToolStep(stepList, "a", "other-nonce"), -1, "a foreign nonce finds nothing");
+assert.equal(findToolStep(stepList.slice(1), "a", NONCE), -1, "a dropped segment is simply not found");
+assert.equal(parseToolStep(undefined, NONCE), null, "a missing segment does not throw");
 
 const longThinking = thinkingSegment(NONCE, "t".repeat(THINKING_BYTES + 500));
 assert.equal(JSON.parse(longThinking.split("\n")[1]).truncated, true, "thinking over the cap is flagged");
@@ -129,6 +138,21 @@ const bounded = budgetState.snapshot().responses.at(-1)!;
 assert.ok(Buffer.byteLength(bounded.markdown, "utf8") <= MAX_RESPONSE_BYTES, "settle does not resurrect budget-dropped segments");
 assert.equal(bounded.truncated, true, "dropping segments stays flagged through settle");
 assert.match(bounded.markdown, /last message/);
+
+// Regression: a tracked step's segment can be shifted out of `active.done` by a later budget drop
+// (`fitSegments` mutates the array with `older.shift()`). completeStep and settle must never crash
+// scanning for it afterward; a step whose segment was dropped simply cannot be completed anymore.
+const survivalState = new ViewerState();
+survivalState.beginTurn();
+survivalState.commitMessage({ role: "assistant", content: [{ type: "toolCall", id: "call-drop", name: "Bash", arguments: { command: "long job" } }] });
+survivalState.commitMessage({ role: "assistant", content: [{ type: "text", text: "x".repeat(MAX_RESPONSE_BYTES) }] });
+let completed: boolean | undefined;
+assert.doesNotThrow(() => { completed = survivalState.completeStep("call-drop", "done", false); }, "completeStep must not throw when its segment was dropped by the byte cap");
+assert.equal(completed, false, "a step whose segment the budget already dropped cannot be completed");
+assert.doesNotThrow(() => survivalState.settle(), "settle must not throw scanning done for abandoned steps after a budget drop");
+const survived = survivalState.snapshot().responses.at(-1)!;
+assert.equal(Buffer.byteLength(survived.markdown, "utf8") <= MAX_RESPONSE_BYTES, true, "the response stays within budget");
+assert.match(survived.markdown, /^x+$/, "the newest oversized message remains visible and coherent");
 
 assert.deepEqual(responseHistory([{ id: "assistant-before-user", message: textMessage("orphan") }, { id: "no-id", message: { role: "user", content: [] } }, { message: textMessage("visible") }]).map(response => [response.id, response.markdown]), [["restored-1", "orphan"], ["no-id", "visible"]]);
 assert.deepEqual(responseHistory([{ message: { role: "user", content: [] } }, { message: textMessage("") }]), []);

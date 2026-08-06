@@ -99,7 +99,7 @@ export function assistantText(message: AssistantLike | undefined): string {
 		.join("");
 }
 
-export type ToolStep = Readonly<{ name: string; summary: string; status: "running" | "ok" | "error"; result: string; truncated: boolean }>;
+export type ToolStep = Readonly<{ id: string; name: string; summary: string; status: "running" | "ok" | "error"; result: string; truncated: boolean }>;
 
 const SUMMARY_KEYS = ["command", "file_path", "path", "pattern", "url", "query"] as const;
 
@@ -129,7 +129,7 @@ const capText = (value: string, limit: number): { text: string; truncated: boole
 const fenceSegment = (language: string, payload: unknown): string => `\`\`\`${language}\n${JSON.stringify(payload)}\n\`\`\``;
 
 export function toolStepSegment(nonce: string, step: ToolStep): string {
-	return fenceSegment("pi-tool", { nonce, name: step.name, summary: step.summary, status: step.status, result: step.result, truncated: step.truncated });
+	return fenceSegment("pi-tool", { nonce, id: step.id, name: step.name, summary: step.summary, status: step.status, result: step.result, truncated: step.truncated });
 }
 
 export function thinkingSegment(nonce: string, thinking: string): string {
@@ -137,15 +137,17 @@ export function thinkingSegment(nonce: string, thinking: string): string {
 	return fenceSegment("pi-think", { nonce, thinking: text, truncated });
 }
 
-export function parseToolStep(segment: string, nonce: string): ToolStep | null {
+export function parseToolStep(segment: unknown, nonce: string): ToolStep | null {
+	if (typeof segment !== "string") return null;
 	const lines = segment.split("\n");
-	if (lines.length !== 3 || lines[0] !== "```pi-tool") return null;
+	if (lines.length !== 3 || lines[0] !== "```pi-tool" || lines[2] !== "```") return null;
 	try {
 		const payload = JSON.parse(lines[1]) as Record<string, unknown>;
 		if (payload.nonce !== nonce) return null;
 		const status = payload.status;
 		if (status !== "running" && status !== "ok" && status !== "error") return null;
 		return {
+			id: typeof payload.id === "string" ? payload.id : "",
 			name: typeof payload.name === "string" ? payload.name : "tool",
 			summary: typeof payload.summary === "string" ? payload.summary : "",
 			status,
@@ -153,6 +155,19 @@ export function parseToolStep(segment: string, nonce: string): ToolStep | null {
 			truncated: payload.truncated === true,
 		};
 	} catch { return null; }
+}
+
+/**
+ * Locate a step by its tool-call id. Never store an index: `fitSegments` drops over-budget segments
+ * with `older.shift()`, mutating the array an index would point into. A step whose segment was
+ * dropped is simply not found, which is what "its result can no longer be attached" means.
+ */
+export function findToolStep(segments: readonly string[], toolCallId: string, nonce: string): number {
+	if (!toolCallId) return -1;
+	for (let index = segments.length - 1; index >= 0; index -= 1) {
+		if (parseToolStep(segments[index], nonce)?.id === toolCallId) return index;
+	}
+	return -1;
 }
 
 const partType = (part: unknown): unknown => part && typeof part === "object" ? (part as { type?: unknown }).type : undefined;
@@ -163,33 +178,34 @@ const partString = (part: unknown, key: string): string => {
 
 /**
  * Convert one message into ordered segments. Tool steps get their own segment so a `toolResult`
- * arriving later can replace them by index instead of editing inside a larger string.
+ * arriving later can replace the whole segment instead of editing inside a larger string. The
+ * tool-call id travels inside the step's payload, so no positional bookkeeping is needed.
  */
-export function contentSegments(message: unknown, nonce: string): { segments: string[]; toolCallIds: (string | undefined)[] } {
+export function contentSegments(message: unknown, nonce: string): string[] {
 	const segments: string[] = [];
-	const toolCallIds: (string | undefined)[] = [];
 	const content = message && typeof message === "object" ? (message as { content?: unknown }).content : undefined;
-	if (!Array.isArray(content)) return { segments, toolCallIds };
+	if (!Array.isArray(content)) return segments;
 	for (const part of content) {
 		const type = partType(part);
 		if (type === "text") {
 			const text = partString(part, "text");
 			if (!text.trim()) continue;
 			segments.push(closeOpenFence(text));
-			toolCallIds.push(undefined);
 		} else if (type === "thinking") {
 			const thinking = partString(part, "thinking");
 			if (!thinking.trim()) continue;
 			segments.push(thinkingSegment(nonce, thinking));
-			toolCallIds.push(undefined);
 		} else if (type === "toolCall") {
-			const name = partString(part, "name") || "tool";
 			const args = part && typeof part === "object" ? (part as { arguments?: unknown }).arguments : undefined;
-			segments.push(toolStepSegment(nonce, { name, summary: summarizeArguments(args), status: "running", result: "", truncated: false }));
-			toolCallIds.push(partString(part, "id") || undefined);
+			segments.push(toolStepSegment(nonce, {
+				id: partString(part, "id"),
+				name: partString(part, "name") || "tool",
+				summary: summarizeArguments(args),
+				status: "running", result: "", truncated: false,
+			}));
 		}
 	}
-	return { segments, toolCallIds };
+	return segments;
 }
 
 /** Visible text of a `toolResult` message. Images and other blocks are dropped. */
@@ -251,7 +267,13 @@ export class ViewerState {
 	 * holds the message still being streamed, so deltas and retries replace only the latter.
 	 */
 	readonly nonce = randomBytes(16).toString("base64url");
-	private active: { id: string; done: string[]; current: string; failed: boolean; dropped: boolean; steps: Map<string, number>; prompt: ViewerPrompt | null } | undefined;
+	/**
+	 * There is deliberately no index map from tool-call id to segment position. `fitSegments` drops
+	 * over-budget segments with `older.shift()`, mutating `done` itself, so any stored index would
+	 * silently point at the wrong segment — or past the end — after the first drop. Steps are found
+	 * by scanning for their id with `findToolStep`.
+	 */
+	private active: { id: string; done: string[]; current: string; failed: boolean; dropped: boolean; prompt: ViewerPrompt | null } | undefined;
 
 	snapshot(): ViewerSnapshot {
 		const latest = this.responses.at(-1);
@@ -278,7 +300,7 @@ export class ViewerState {
 		this.closed = false;
 		if (this.active) return this.active.id;
 		const id = `live-${++this.live}`;
-		this.active = { id, done: [], current: "", failed: false, dropped: false, steps: new Map(), prompt: null };
+		this.active = { id, done: [], current: "", failed: false, dropped: false, prompt: null };
 		return id;
 	}
 
@@ -311,22 +333,18 @@ export class ViewerState {
 	 */
 	commitMessage(message: unknown): void {
 		if (!this.active) return;
-		const { segments, toolCallIds } = contentSegments(message, this.nonce);
+		const segments = contentSegments(message, this.nonce);
 		if (!segments.length) return;
 		this.active.current = "";
-		segments.forEach((segment, offset) => {
-			this.active!.done.push(segment);
-			const id = toolCallIds[offset];
-			if (id) this.active!.steps.set(id, this.active!.done.length - 1);
-		});
+		this.active.done.push(...segments);
 		this.publishActive();
 	}
 
 	/** Attach a result to the step that requested it. Returns false when the call is not ours. */
 	completeStep(toolCallId: string, result: string, isError: boolean): boolean {
 		if (!this.active) return false;
-		const index = this.active.steps.get(toolCallId);
-		if (index === undefined) return false;
+		const index = findToolStep(this.active.done, toolCallId, this.nonce);
+		if (index < 0) return false;
 		const step = parseToolStep(this.active.done[index], this.nonce);
 		if (!step) return false;
 		const { text, truncated } = capText(result, TOOL_RESULT_BYTES);
@@ -367,12 +385,11 @@ export class ViewerState {
 		if (index < 0) return; // stream() is the only path that makes a visible response.
 		// A step with no result when the turn ends never got one; leaving it "running" would lie.
 		let stepsClosed = false;
-		active.steps.forEach(stepIndex => {
-			const step = parseToolStep(active.done[stepIndex], this.nonce);
-			if (step?.status === "running") {
-				active.done[stepIndex] = toolStepSegment(this.nonce, { ...step, status: "error", result: "Interrupted." });
-				stepsClosed = true;
-			}
+		active.done.forEach((segment, stepIndex) => {
+			const step = parseToolStep(segment, this.nonce);
+			if (step?.status !== "running") return;
+			active.done[stepIndex] = toolStepSegment(this.nonce, { ...step, status: "error", result: "Interrupted." });
+			stepsClosed = true;
 		});
 		// A last message the token limit cut off inside a fence would bleed into whatever follows it
 		// — the next response in an export — and would not match what a reload rebuilds. Closing an
