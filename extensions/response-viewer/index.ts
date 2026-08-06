@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { assistantText, responseHistory, toolResultText, ViewerState, type ViewerSnapshot } from "./state.ts";
+import { assistantText, messageText, responseHistory, ViewerState, type ViewerSnapshot } from "./state.ts";
 import { startViewerServer, type ViewerServer } from "./server.ts";
 
 const extensionDirectory = dirname(fileURLToPath(import.meta.url));
@@ -114,7 +114,7 @@ export function createResponseViewer(pi: ExtensionAPI, supplied: Partial<ViewerD
 		// new before_agent_start, so a user message is the only boundary between their responses.
 		if (message?.role === "user") {
 			if (state.splitTurn(SAFE_FAILURE_MESSAGE)) publish(true);
-			state.setPrompt(toolResultText(message));
+			state.setPrompt(messageText(message));
 		}
 	});
 	pi.on("message_update", (event) => {
@@ -128,7 +128,7 @@ export function createResponseViewer(pi: ExtensionAPI, supplied: Partial<ViewerD
 	 */
 	const applyToolResult = (source: { toolCallId?: unknown; isError?: unknown }) => {
 		if (typeof source.toolCallId !== "string") return;
-		if (state.completeStep(source.toolCallId, toolResultText(source), source.isError === true)) publish(false);
+		if (state.completeStep(source.toolCallId, messageText(source), source.isError === true)) publish(false);
 	};
 	pi.on("tool_result", (event) => { if (enabled) applyToolResult(event as { toolCallId?: unknown; isError?: unknown }); });
 	pi.on("message_end", (event) => {

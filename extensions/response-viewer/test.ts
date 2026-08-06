@@ -7,7 +7,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runInNewContext } from "node:vm";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { assistantText, closeOpenFence, contentSegments, findToolStep, MAX_RESPONSE_BYTES, MAX_RESPONSES, parseToolStep, PROMPT_BYTES, responseHistory, SEGMENT_SEPARATOR, summarizeArguments, THINKING_BYTES, thinkingSegment, toolResultText, toolStepSegment, ViewerState, type ViewerSnapshot } from "./state.ts";
+import { assistantText, closeOpenFence, contentSegments, findToolStep, MAX_RESPONSE_BYTES, MAX_RESPONSES, messageText, parseToolStep, PROMPT_BYTES, responseHistory, SEGMENT_SEPARATOR, summarizeArguments, THINKING_BYTES, thinkingSegment, toolStepSegment, ViewerState, type ViewerSnapshot } from "./state.ts";
 import { SseClients, startViewerServer, type SseResponse, type ViewerServer } from "./server.ts";
 import { createResponseViewer, openCommand, openOnce, openViewer, viewerEnabled, type ViewerDependencies } from "./index.ts";
 
@@ -76,8 +76,11 @@ const longThinking = thinkingSegment(NONCE, "t".repeat(THINKING_BYTES + 500));
 assert.equal(JSON.parse(longThinking.split("\n")[1]).truncated, true, "thinking over the cap is flagged");
 assert.equal(JSON.parse(longThinking.split("\n")[1]).thinking.length, THINKING_BYTES, "thinking is cut at THINKING_BYTES");
 
-assert.equal(toolResultText({ role: "toolResult", content: [{ type: "text", text: "out" }, { type: "image" }] }), "out");
-assert.equal(toolResultText({ role: "toolResult" }), "");
+assert.equal(messageText({ role: "toolResult", content: [{ type: "text", text: "out" }, { type: "image" }] }), "out");
+assert.equal(messageText({ role: "toolResult" }), "");
+// UserMessage.content is `string | (TextContent | ImageContent)[]`; the bare-string form is real.
+assert.equal(messageText({ role: "user", content: "a plain string prompt" }), "a plain string prompt");
+assert.equal(messageText({ role: "user", content: "" }), "");
 
 // --- turn context: state wiring ---
 const contextState = new ViewerState();
@@ -502,6 +505,31 @@ assert.deepEqual(contentSegments({ role: "user", content: [{ type: "text", text:
 	const step = final.responses.at(-1)!.markdown.split(SEGMENT_SEPARATOR).map(segment => parseToolStep(segment, final.nonce)).find(Boolean);
 	assert.equal(step?.status, "error", "tool_result alone completes the step");
 	assert.equal(step?.result, "boom");
+}
+
+// UserMessage.content may be a bare string rather than an array of text blocks; the prompt must
+// still reach `response.prompt.text` in that shape.
+{
+	const handlers = new Map<string, (event: unknown, ctx: unknown) => unknown>();
+	const publishes: ViewerSnapshot[] = [];
+	const pi = {
+		on(event: string, handler: (event: unknown, ctx: unknown) => unknown) { handlers.set(event, handler); },
+		registerCommand() {},
+	};
+	createResponseViewer(pi as unknown as ExtensionAPI, {
+		directory: here,
+		launchViewer: () => {},
+		startServer: async (_directory, getState) => ({ url: "http://127.0.0.1/fake", publish() { publishes.push(getState()); }, async close() {} }),
+	});
+	const ctx = { mode: "tui", ui: {} };
+	await handlers.get("session_start")!({}, ctx);
+	handlers.get("before_agent_start")!({}, ctx);
+	handlers.get("message_start")!({ message: { role: "user", content: "string-form prompt" } }, ctx);
+	handlers.get("message_start")!({ message: { role: "assistant" } }, ctx);
+	handlers.get("message_update")!({ message: { role: "assistant", content: [{ type: "text", text: "on it" }] } }, ctx);
+	handlers.get("agent_settled")!({}, ctx);
+	const final = publishes.at(-1)!;
+	assert.equal(final.responses.at(-1)!.prompt?.text, "string-form prompt", "a bare-string UserMessage.content still becomes the prompt");
 }
 
 const disabledHandlers = new Map<string, (event: unknown, ctx: unknown) => unknown>();

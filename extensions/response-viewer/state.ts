@@ -211,9 +211,15 @@ export function contentSegments(message: unknown, nonce: string): string[] {
 	return segments;
 }
 
-/** Visible text of a `toolResult` message. Images and other blocks are dropped. */
-export function toolResultText(message: unknown): string {
+/**
+ * Visible text of any message or event payload, with no role gate. Images and other block kinds are
+ * dropped. `content` may be a bare string — `UserMessage.content` is `string | (TextContent |
+ * ImageContent)[]` — so the string form is handled before the array form. Tool results always use
+ * the array form, but reading both here keeps one extractor for both callers.
+ */
+export function messageText(message: unknown): string {
 	const content = message && typeof message === "object" ? (message as { content?: unknown }).content : undefined;
+	if (typeof content === "string") return content;
 	if (!Array.isArray(content)) return "";
 	return content.filter(part => partType(part) === "text").map(part => partString(part, "text")).join("");
 }
