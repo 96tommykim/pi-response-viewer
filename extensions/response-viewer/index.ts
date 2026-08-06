@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { assistantText, responseHistory, ViewerState, type ViewerSnapshot } from "./state.ts";
+import { assistantText, responseHistory, toolResultText, ViewerState, type ViewerSnapshot } from "./state.ts";
 import { startViewerServer, type ViewerServer } from "./server.ts";
 
 const extensionDirectory = dirname(fileURLToPath(import.meta.url));
@@ -108,27 +108,41 @@ export function createResponseViewer(pi: ExtensionAPI, supplied: Partial<ViewerD
 	/** The only signal that separates a turn's assistant messages from one message's stream deltas. */
 	pi.on("message_start", (event) => {
 		if (!enabled) return;
-		const role = (event.message as { role?: unknown } | undefined)?.role;
-		if (role === "assistant") { state.beginMessage(); return; }
+		const message = event.message as { role?: unknown } | undefined;
+		if (message?.role === "assistant") { state.beginMessage(); return; }
 		// Steering and queued follow-up prompts are injected into the running agent loop without a
 		// new before_agent_start, so a user message is the only boundary between their responses.
-		if (role === "user" && state.splitTurn(SAFE_FAILURE_MESSAGE)) publish(true);
+		if (message?.role === "user") {
+			if (state.splitTurn(SAFE_FAILURE_MESSAGE)) publish(true);
+			state.setPrompt(toolResultText(message));
+		}
 	});
 	pi.on("message_update", (event) => {
 		if (!enabled) return;
 		const text = assistantText(event.message);
 		if (text.trim()) { state.stream(text); publish(false); }
 	});
+	/**
+	 * Pi may deliver a tool result as a `toolResult` message or as a `tool_result` event. Both are
+	 * accepted; `completeStep` ignores a step that already has a result, so the first one wins.
+	 */
+	const applyToolResult = (source: { toolCallId?: unknown; isError?: unknown }) => {
+		if (typeof source.toolCallId !== "string") return;
+		if (state.completeStep(source.toolCallId, toolResultText(source), source.isError === true)) publish(false);
+	};
+	pi.on("tool_result", (event) => { if (enabled) applyToolResult(event as { toolCallId?: unknown; isError?: unknown }); });
 	pi.on("message_end", (event) => {
 		if (!enabled) return;
-		const message = event.message as { role?: unknown; content?: unknown; stopReason?: unknown };
-		const text = assistantText(message);
+		const message = event.message as { role?: unknown; toolCallId?: unknown; isError?: unknown; stopReason?: unknown };
+		if (message.role === "toolResult") { applyToolResult(message); return; }
 		if (message.stopReason === "error" || message.stopReason === "aborted") {
 			state.fail();
 			return;
 		}
-		if (!text.trim()) return;
-		state.stream(text);
+		const text = assistantText(message);
+		if (text.trim()) state.stream(text);
+		// Re-emits this message in source order with its thinking and tool steps, so `current` is cleared.
+		state.commitMessage(message);
 		publish(false);
 	});
 	pi.on("agent_settled", () => { if (enabled) { state.settle(SAFE_FAILURE_MESSAGE); publish(true); } });

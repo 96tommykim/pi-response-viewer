@@ -177,13 +177,16 @@ const partString = (part: unknown, key: string): string => {
 };
 
 /**
- * Convert one message into ordered segments. Tool steps get their own segment so a `toolResult`
- * arriving later can replace the whole segment instead of editing inside a larger string. The
- * tool-call id travels inside the step's payload, so no positional bookkeeping is needed.
+ * Convert one assistant message into ordered segments. Tool steps get their own segment so a
+ * `toolResult` arriving later can replace the whole segment instead of editing inside a larger
+ * string. The tool-call id travels inside the step's payload, so no positional bookkeeping is needed.
+ * A message of any other role — including one the viewer does not recognize — must produce nothing,
+ * or its text would enter the visible response; `assistantText` gates the same way.
  */
 export function contentSegments(message: unknown, nonce: string): string[] {
 	const segments: string[] = [];
-	const content = message && typeof message === "object" ? (message as { content?: unknown }).content : undefined;
+	if (!message || typeof message !== "object" || (message as { role?: unknown }).role !== "assistant") return segments;
+	const content = (message as { content?: unknown }).content;
 	if (!Array.isArray(content)) return segments;
 	for (const part of content) {
 		const type = partType(part);
@@ -347,6 +350,7 @@ export class ViewerState {
 		if (index < 0) return false;
 		const step = parseToolStep(this.active.done[index], this.nonce);
 		if (!step) return false;
+		if (step.status !== "running") return false; // Already resolved; the first delivery wins.
 		const { text, truncated } = capText(result, TOOL_RESULT_BYTES);
 		this.active.done[index] = toolStepSegment(this.nonce, { ...step, status: isError ? "error" : "ok", result: text, truncated });
 		this.publishActive();

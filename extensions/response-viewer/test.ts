@@ -399,17 +399,23 @@ assert.equal(fakeServers[0].publishes.at(-1)!.snapshot.responses.length, 3, "a s
 const beforeSteering = fakeServers[0].publishes.at(-1)!.snapshot.responses.length;
 await fire("before_agent_start", {}, tuiContext);
 await fire("agent_start", {}, tuiContext);
-await fire("message_start", { message: { role: "user", content: [{ type: "text", text: "ordinary prompt must not leak" }] } }, tuiContext);
+await fire("message_start", { message: { role: "user", content: [{ type: "text", text: "ordinary prompt stays out of the body" }] } }, tuiContext);
 assert.equal(fakeServers[0].publishes.at(-1)!.snapshot.responses.length, beforeSteering, "the prompt that opens a turn is not a split");
 await fire("message_start", { message: textMessage("") }, tuiContext);
 await fire("message_update", { message: textMessage("first answer") }, tuiContext);
-await fire("message_start", { message: { role: "user", content: [{ type: "text", text: "steering prompt must not leak" }] } }, tuiContext);
+assert.doesNotMatch(fakeServers[0].publishes.at(-1)!.snapshot.responses.map(response => response.markdown).join("\n"), /ordinary prompt stays out of the body/, "a prompt never enters the rendered body");
+assert.equal(fakeServers[0].publishes.at(-1)!.snapshot.responses.at(-1)?.prompt?.text, "ordinary prompt stays out of the body", "a prompt is carried in its own field");
+await fire("message_start", { message: { role: "user", content: [{ type: "text", text: "steering prompt stays out of the body" }] } }, tuiContext);
 await fire("message_start", { message: textMessage("") }, tuiContext);
 await fire("message_update", { message: textMessage("steered answer") }, tuiContext);
 await fire("agent_settled", {}, tuiContext);
 const steered = fakeServers[0].publishes.at(-1)!.snapshot;
 assert.deepEqual(steered.responses.slice(-2).map(response => [response.markdown, response.status]), [["first answer", "complete"], ["steered answer", "complete"]], "a mid-run steering prompt starts a new response instead of extending the previous one");
-assert.doesNotMatch(JSON.stringify(steered), /steering prompt must not leak/);
+assert.doesNotMatch(steered.responses.map(response => response.markdown).join("\n"), /steering prompt stays out of the body/, "a prompt never enters the rendered body");
+// splitTurn (which settles the previous response) runs before setPrompt in the message_start handler,
+// so the steering prompt must attach to the response it newly opens, not the one the split just settled.
+assert.equal(steered.responses.at(-1)?.prompt?.text, "steering prompt stays out of the body", "the steering prompt attaches to the response it opens");
+assert.equal(steered.responses.at(-2)?.prompt?.text, "ordinary prompt stays out of the body", "the response settled by the split keeps the prompt it already had, not the steering prompt");
 branch = [{ id: "tree-user", message: { role: "user", content: [{ type: "text", text: "hidden tree prompt" }] } }, { message: textMessage("tree-restored") }];
 await fire("session_tree", {}, tuiContext);
 assert.equal(latestResponse(fakeServers[0].publishes.at(-1)!.snapshot)?.markdown, "tree-restored");
@@ -420,6 +426,83 @@ await fire("session_start", {}, tuiContext);
 assert.equal(fakeServers[0].closes, 1, "replacement start closes the old viewer"); assert.equal(fakeServers.length, 2);
 await fire("agent_start", {}, tuiContext); assert.equal(lifecycleLaunches.length, 3, "replacement can open its new URL once");
 await fire("session_shutdown", {}, tuiContext); assert.equal(fakeServers[1].closes, 1);
+
+// --- turn context: extension wiring ---
+// contentSegments gates on role the same way assistantText does: a message of any other role —
+// including one the viewer does not recognize — contributes no segment.
+assert.deepEqual(contentSegments({ role: "tool", content: [{ type: "text", text: "must not leak" }] }, "n"), [], "an unrecognized role contributes no segment");
+assert.deepEqual(contentSegments({ role: "user", content: [{ type: "text", text: "my prompt" }] }, "n"), [], "a user message is not body content");
+{
+	const handlers = new Map<string, (event: unknown, ctx: unknown) => unknown>();
+	const publishes: ViewerSnapshot[] = [];
+	const pi = {
+		on(event: string, handler: (event: unknown, ctx: unknown) => unknown) { handlers.set(event, handler); },
+		registerCommand() {},
+	};
+	createResponseViewer(pi as unknown as ExtensionAPI, {
+		directory: here,
+		launchViewer: () => {},
+		startServer: async (_directory, getState) => ({
+			url: "http://127.0.0.1/fake",
+			publish() { publishes.push(getState()); },
+			async close() {},
+		}),
+	});
+	const ctx = { mode: "tui", ui: {} };
+	await handlers.get("session_start")!({}, ctx);
+	handlers.get("before_agent_start")!({}, ctx);
+	handlers.get("message_start")!({ message: { role: "user", content: [{ type: "text", text: "why is it slow?" }] } }, ctx);
+	handlers.get("message_start")!({ message: { role: "assistant" } }, ctx);
+	handlers.get("message_update")!({ message: { role: "assistant", content: [{ type: "text", text: "checking" }] } }, ctx);
+	handlers.get("message_end")!({ message: { role: "assistant", content: [
+		{ type: "text", text: "checking" },
+		{ type: "toolCall", id: "c1", name: "Bash", arguments: { command: "npm test" } },
+	] } }, ctx);
+	handlers.get("message_end")!({ message: { role: "toolResult", toolCallId: "c1", toolName: "Bash", content: [{ type: "text", text: "3 passed" }], isError: false } }, ctx);
+	// Whichever source Pi actually uses, the first delivery wins and the second changes nothing.
+	handlers.get("tool_result")!({ toolCallId: "c1", toolName: "Bash", content: [{ type: "text", text: "IGNORED SECOND DELIVERY" }], isError: true }, ctx);
+	handlers.get("agent_settled")!({}, ctx);
+
+	const final = publishes.at(-1)!;
+	const response = final.responses.at(-1)!;
+	assert.equal(response.prompt?.text, "why is it slow?", "the prompt becomes the response header");
+	const steps = response.markdown.split(SEGMENT_SEPARATOR).map(segment => parseToolStep(segment, final.nonce)).filter(Boolean);
+	assert.equal(steps.length, 1);
+	assert.equal(steps[0]!.name, "Bash");
+	assert.equal(steps[0]!.summary, "npm test");
+	assert.equal(steps[0]!.status, "ok");
+	assert.equal(steps[0]!.result, "3 passed", "the first delivery wins; the second is ignored");
+	assert.equal(response.status, "complete");
+}
+
+// The `tool_result` event alone must also complete a step, for a Pi build that emits only that.
+{
+	const handlers = new Map<string, (event: unknown, ctx: unknown) => unknown>();
+	const publishes: ViewerSnapshot[] = [];
+	const pi = {
+		on(event: string, handler: (event: unknown, ctx: unknown) => unknown) { handlers.set(event, handler); },
+		registerCommand() {},
+	};
+	createResponseViewer(pi as unknown as ExtensionAPI, {
+		directory: here,
+		launchViewer: () => {},
+		startServer: async (_directory, getState) => ({ url: "http://127.0.0.1/fake", publish() { publishes.push(getState()); }, async close() {} }),
+	});
+	const ctx = { mode: "tui", ui: {} };
+	await handlers.get("session_start")!({}, ctx);
+	handlers.get("before_agent_start")!({}, ctx);
+	handlers.get("message_start")!({ message: { role: "assistant" } }, ctx);
+	handlers.get("message_end")!({ message: { role: "assistant", content: [
+		{ type: "text", text: "running it" },
+		{ type: "toolCall", id: "c9", name: "Bash", arguments: { command: "ls" } },
+	] } }, ctx);
+	handlers.get("tool_result")!({ toolCallId: "c9", toolName: "Bash", content: [{ type: "text", text: "boom" }], isError: true }, ctx);
+	handlers.get("agent_settled")!({}, ctx);
+	const final = publishes.at(-1)!;
+	const step = final.responses.at(-1)!.markdown.split(SEGMENT_SEPARATOR).map(segment => parseToolStep(segment, final.nonce)).find(Boolean);
+	assert.equal(step?.status, "error", "tool_result alone completes the step");
+	assert.equal(step?.result, "boom");
+}
 
 const disabledHandlers = new Map<string, (event: unknown, ctx: unknown) => unknown>();
 const disabledPi = { on(event: string, handler: (event: unknown, ctx: unknown) => unknown) { disabledHandlers.set(event, handler); }, registerCommand() {} };
