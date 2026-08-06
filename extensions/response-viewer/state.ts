@@ -1,9 +1,14 @@
+import { randomBytes } from "node:crypto";
+
 export type ViewerStatus = "waiting" | "running" | "complete" | "error" | "closed";
 export type ResponseStatus = Exclude<ViewerStatus, "waiting" | "closed">;
+
+export type ViewerPrompt = Readonly<{ text: string; truncated: boolean }>;
 
 export type ViewerResponse = Readonly<{
 	id: string;
 	markdown: string;
+	prompt: ViewerPrompt | null;
 	status: ResponseStatus;
 	error: string | null;
 	truncated: boolean;
@@ -14,13 +19,14 @@ export type ViewerSnapshot = Readonly<{
 	responses: readonly ViewerResponse[];
 	latestId: string | null;
 	revision: number;
+	nonce: string;
 }>;
 
 type AssistantLike = { role?: unknown; content?: unknown; stopReason?: unknown; errorMessage?: unknown };
 type EntryLike = { type?: unknown; id?: unknown; message?: AssistantLike };
 
 export const MAX_RESPONSES = 30;
-export const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
+export const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 /** A turn speaks once per assistant message. The rule marks where tool work happened between them. */
 export const SEGMENT_SEPARATOR = "\n\n---\n\n";
 export const TOOL_RESULT_BYTES = 8 * 1024;
@@ -211,7 +217,7 @@ export function responseHistory(entries: Iterable<unknown>): ViewerResponse[] {
 		if (!pending || !newest) return;
 		const { markdown, truncated } = fitSegments(pending.segments.slice(0, -1), newest);
 		if (!markdown.trim()) return;
-		result.push({ id: pending.id, markdown, status: "complete", error: null, truncated });
+		result.push({ id: pending.id, markdown, prompt: null, status: "complete", error: null, truncated });
 	};
 	for (const entry of entries) {
 		const message = messageOf(entry);
@@ -244,7 +250,8 @@ export class ViewerState {
 	 * `done` holds the text of assistant messages this turn has already finished; `current`
 	 * holds the message still being streamed, so deltas and retries replace only the latter.
 	 */
-	private active: { id: string; done: string[]; current: string; failed: boolean; dropped: boolean } | undefined;
+	readonly nonce = randomBytes(16).toString("base64url");
+	private active: { id: string; done: string[]; current: string; failed: boolean; dropped: boolean; steps: Map<string, number>; prompt: ViewerPrompt | null } | undefined;
 
 	snapshot(): ViewerSnapshot {
 		const latest = this.responses.at(-1);
@@ -254,6 +261,7 @@ export class ViewerState {
 			responses: Object.freeze(this.responses.map(response => Object.freeze(copyResponse(response)))),
 			latestId: latest?.id ?? null,
 			revision: this.revision,
+			nonce: this.nonce,
 		});
 	}
 
@@ -270,7 +278,7 @@ export class ViewerState {
 		this.closed = false;
 		if (this.active) return this.active.id;
 		const id = `live-${++this.live}`;
-		this.active = { id, done: [], current: "", failed: false, dropped: false };
+		this.active = { id, done: [], current: "", failed: false, dropped: false, steps: new Map(), prompt: null };
 		return id;
 	}
 
@@ -286,9 +294,52 @@ export class ViewerState {
 		if (!markdown.trim() || !this.active) return;
 		this.active.current = markdown;
 		this.active.failed = false;
+		this.publishActive();
+	}
+
+	/** Record the prompt that opened this turn. Shown as the response header, not part of the body. */
+	setPrompt(text: string): void {
+		if (!this.active || !text.trim()) return;
+		const capped = truncateUtf8(text, PROMPT_BYTES);
+		this.active.prompt = { text: capped, truncated: capped.length < text.length };
+	}
+
+	/**
+	 * Finalize one assistant message into ordered segments. The streaming text is cleared because
+	 * it is re-emitted here in source order alongside thinking and tool steps; emitting them while
+	 * `current` still held the text would place them before it.
+	 */
+	commitMessage(message: unknown): void {
+		if (!this.active) return;
+		const { segments, toolCallIds } = contentSegments(message, this.nonce);
+		if (!segments.length) return;
+		this.active.current = "";
+		segments.forEach((segment, offset) => {
+			this.active!.done.push(segment);
+			const id = toolCallIds[offset];
+			if (id) this.active!.steps.set(id, this.active!.done.length - 1);
+		});
+		this.publishActive();
+	}
+
+	/** Attach a result to the step that requested it. Returns false when the call is not ours. */
+	completeStep(toolCallId: string, result: string, isError: boolean): boolean {
+		if (!this.active) return false;
+		const index = this.active.steps.get(toolCallId);
+		if (index === undefined) return false;
+		const step = parseToolStep(this.active.done[index], this.nonce);
+		if (!step) return false;
+		const { text, truncated } = capText(result, TOOL_RESULT_BYTES);
+		this.active.done[index] = toolStepSegment(this.nonce, { ...step, status: isError ? "error" : "ok", result: text, truncated });
+		this.publishActive();
+		return true;
+	}
+
+	private publishActive(): void {
+		if (!this.active) return;
 		const joined = this.fit(this.active);
 		const index = this.responses.findIndex(response => response.id === this.active!.id);
-		const next: ViewerResponse = { id: this.active.id, markdown: joined, status: "running", error: null, truncated: this.active.dropped };
+		const next: ViewerResponse = { id: this.active.id, markdown: joined, prompt: this.active.prompt, status: "running", error: null, truncated: this.active.dropped };
 		if (index < 0) this.responses.push(next);
 		else this.responses[index] = next;
 		this.bound();
@@ -314,12 +365,29 @@ export class ViewerState {
 		if (!active) return;
 		const index = this.responses.findIndex(response => response.id === active.id);
 		if (index < 0) return; // stream() is the only path that makes a visible response.
+		// A step with no result when the turn ends never got one; leaving it "running" would lie.
+		let stepsClosed = false;
+		active.steps.forEach(stepIndex => {
+			const step = parseToolStep(active.done[stepIndex], this.nonce);
+			if (step?.status === "running") {
+				active.done[stepIndex] = toolStepSegment(this.nonce, { ...step, status: "error", result: "Interrupted." });
+				stepsClosed = true;
+			}
+		});
 		// A last message the token limit cut off inside a fence would bleed into whatever follows it
-		// — the next response in an export — and would not match what a reload rebuilds.
+		// — the next response in an export — and would not match what a reload rebuilds. Closing an
+		// abandoned step edits an already-published segment too, so either case forces a rebuild;
+		// otherwise the already-published markdown (which fail() may have intentionally kept showing
+		// stale partial text for) is left untouched. Route the rebuild through `fitSegments`, not
+		// `joinSegments`, so it cannot resurrect segments the byte budget already dropped.
 		const closed = closeOpenFence(active.current);
+		if (stepsClosed || closed !== active.current) {
+			const { markdown, truncated } = fitSegments(active.done, closed);
+			if (truncated) active.dropped = true;
+			this.responses[index] = { ...this.responses[index], markdown, truncated: active.dropped };
+		}
 		this.responses[index] = {
 			...this.responses[index],
-			markdown: closed === active.current ? this.responses[index].markdown : joinSegments([...active.done, closed]),
 			status: active.failed ? "error" : "complete",
 			error: active.failed ? errorMessage : null,
 		};
@@ -358,6 +426,8 @@ export class ViewerState {
 		}
 	}
 
-	private totalBytes(): number { return this.responses.reduce((total, response) => total + utf8Bytes(response.markdown), 0); }
+	private totalBytes(): number {
+		return this.responses.reduce((total, response) => total + utf8Bytes(response.markdown) + utf8Bytes(response.prompt?.text ?? ""), 0);
+	}
 	private changed(): void { this.revision += 1; }
 }

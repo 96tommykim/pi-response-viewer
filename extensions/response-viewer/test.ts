@@ -69,6 +69,67 @@ assert.equal(JSON.parse(longThinking.split("\n")[1]).thinking.length, THINKING_B
 
 assert.equal(toolResultText({ role: "toolResult", content: [{ type: "text", text: "out" }, { type: "image" }] }), "out");
 assert.equal(toolResultText({ role: "toolResult" }), "");
+
+// --- turn context: state wiring ---
+const contextState = new ViewerState();
+assert.match(contextState.nonce, /^[\w-]{16,}$/, "each state gets an unguessable nonce");
+assert.equal(contextState.snapshot().nonce, contextState.nonce, "the nonce reaches the client through the snapshot");
+
+contextState.beginTurn();
+contextState.setPrompt("check the segment model");
+contextState.stream("looking now");
+contextState.commitMessage({ role: "assistant", content: [
+	{ type: "text", text: "looking now" },
+	{ type: "toolCall", id: "call-1", name: "Read", arguments: { file_path: "state.ts" } },
+] });
+let live = contextState.snapshot().responses.at(-1)!;
+assert.equal(live.prompt?.text, "check the segment model");
+assert.equal(live.markdown.split(SEGMENT_SEPARATOR).length, 2, "text and tool step are separate segments");
+assert.equal(parseToolStep(live.markdown.split(SEGMENT_SEPARATOR)[1], contextState.nonce)?.status, "running");
+
+assert.equal(contextState.completeStep("call-1", "file contents", false), true);
+live = contextState.snapshot().responses.at(-1)!;
+const step = parseToolStep(live.markdown.split(SEGMENT_SEPARATOR)[1], contextState.nonce);
+assert.equal(step?.status, "ok");
+assert.equal(step?.result, "file contents");
+assert.equal(live.markdown.split(SEGMENT_SEPARATOR)[0], "looking now", "other segments are untouched");
+assert.equal(contextState.completeStep("call-missing", "x", false), false, "an unknown tool call id is ignored");
+
+contextState.commitMessage({ role: "assistant", content: [
+	{ type: "toolCall", id: "call-2", name: "Bash", arguments: { command: "npm test" } },
+] });
+contextState.settle("failed");
+const settled = contextState.snapshot().responses.at(-1)!;
+const abandoned = settled.markdown.split(SEGMENT_SEPARATOR).map(segment => parseToolStep(segment, contextState.nonce)).filter(Boolean);
+assert.equal(abandoned.at(-1)?.status, "error", "a step still running when the turn ends is closed as an error");
+assert.equal(abandoned.at(-1)?.result, "Interrupted.");
+
+const promptState = new ViewerState();
+promptState.beginTurn();
+promptState.setPrompt("p".repeat(PROMPT_BYTES + 100));
+promptState.stream("body");
+assert.equal(promptState.snapshot().responses.at(-1)?.prompt?.truncated, true, "an oversized prompt is truncated and flagged");
+assert.equal(promptState.snapshot().responses.at(-1)?.prompt?.text.length, PROMPT_BYTES);
+
+// A failed message must still drop its partial text so a retry does not double it.
+const retryDiscardState = new ViewerState();
+retryDiscardState.beginTurn(); retryDiscardState.stream("partial"); retryDiscardState.fail(); retryDiscardState.stream("retried"); retryDiscardState.settle();
+assert.equal(retryDiscardState.snapshot().responses.at(-1)?.markdown, "retried", "fail() still discards the partial message");
+
+assert.equal(MAX_RESPONSE_BYTES, 4 * 1024 * 1024, "the byte budget accounts for tool results");
+
+// settle() now always rebuilds the markdown; it must still respect the byte cap.
+const budgetState = new ViewerState();
+budgetState.beginTurn();
+budgetState.stream("first");
+budgetState.commitMessage({ role: "assistant", content: [{ type: "text", text: "x".repeat(MAX_RESPONSE_BYTES) }] });
+budgetState.commitMessage({ role: "assistant", content: [{ type: "text", text: "last message" }] });
+budgetState.settle();
+const bounded = budgetState.snapshot().responses.at(-1)!;
+assert.ok(Buffer.byteLength(bounded.markdown, "utf8") <= MAX_RESPONSE_BYTES, "settle does not resurrect budget-dropped segments");
+assert.equal(bounded.truncated, true, "dropping segments stays flagged through settle");
+assert.match(bounded.markdown, /last message/);
+
 assert.deepEqual(responseHistory([{ id: "assistant-before-user", message: textMessage("orphan") }, { id: "no-id", message: { role: "user", content: [] } }, { message: textMessage("visible") }]).map(response => [response.id, response.markdown]), [["restored-1", "orphan"], ["no-id", "visible"]]);
 assert.deepEqual(responseHistory([{ message: { role: "user", content: [] } }, { message: textMessage("") }]), []);
 assert.equal(viewerEnabled({ mode: "rpc" }), false);
@@ -100,7 +161,7 @@ class FakeResponse extends EventEmitter implements SseResponse {
 	write(chunk: string): boolean { this.writes.push(chunk); return !this.blocked; }
 	end(chunk?: string): void { if (chunk) this.writes.push(chunk); this.writableEnded = true; this.emit("close"); }
 }
-const snapshot = (revision: number): ViewerSnapshot => ({ status: "running", responses: [{ id: `state-${revision}`, markdown: `state-${revision}`, status: "running", error: null, truncated: false }], latestId: `state-${revision}`, revision });
+const snapshot = (revision: number): ViewerSnapshot => ({ status: "running", responses: [{ id: `state-${revision}`, markdown: `state-${revision}`, prompt: null, status: "running", error: null, truncated: false }], latestId: `state-${revision}`, revision, nonce: "test-nonce" });
 const pool = new SseClients(2);
 const slow = new FakeResponse(); slow.blocked = true;
 assert.equal(pool.add(slow, snapshot(1)), true);
@@ -122,7 +183,7 @@ finalPool.add(finalBlocked, snapshot(1)); finalPool.publish({ ...snapshot(2), st
 assert.match(finalBlocked.writes.at(-1)!, /"status":"closed"/, "a blocked client receives the final pending state through end()");
 
 const historyState = new ViewerState();
-historyState.restore(Array.from({ length: MAX_RESPONSES + 4 }, (_, index) => ({ id: `restored-${index}`, markdown: `response-${index}`, status: "complete" as const, error: null, truncated: false })));
+historyState.restore(Array.from({ length: MAX_RESPONSES + 4 }, (_, index) => ({ id: `restored-${index}`, markdown: `response-${index}`, prompt: null, status: "complete" as const, error: null, truncated: false })));
 assert.equal(historyState.snapshot().responses.length, MAX_RESPONSES);
 assert.equal(historyState.snapshot().responses[0].id, "restored-4", "history drops the oldest items first");
 const turnId = historyState.beginTurn(); const duplicateId = historyState.beginTurn();
@@ -135,14 +196,14 @@ assert.equal(historyState.snapshot().responses.at(-1)?.markdown, "live response"
 historyState.beginTurn(); historyState.fail(); historyState.settle("generic failure");
 assert.equal(historyState.snapshot().responses.at(-1)?.markdown, "live response", "empty failed turns are invisible");
 const oversized = "가".repeat(Math.ceil(MAX_RESPONSE_BYTES / 3) + 1);
-const capState = new ViewerState(); capState.restore([{ id: "big", markdown: oversized, status: "complete", error: null, truncated: false }]);
+const capState = new ViewerState(); capState.restore([{ id: "big", markdown: oversized, prompt: null, status: "complete", error: null, truncated: false }]);
 const capped = capState.snapshot().responses[0];
 assert.equal(Buffer.byteLength(capped.markdown, "utf8") <= MAX_RESPONSE_BYTES, true); assert.equal(Buffer.byteLength(capped.markdown, "utf8") + Buffer.byteLength("가", "utf8") > MAX_RESPONSE_BYTES, true);
 assert.equal(capped.truncated, true); assert.equal(capped.markdown.includes("�"), false, "UTF-8 truncation does not split a code point");
 capState.beginTurn(); capState.stream("retained latest"); capState.settle();
 assert.deepEqual(capState.snapshot().responses.map(response => response.markdown), ["retained latest"], "byte bounds drop old responses before the newest");
 const failedState = new ViewerState(); failedState.beginTurn(); failedState.stream("partial"); failedState.fail(); failedState.settle("generic failure");
-assert.deepEqual(failedState.snapshot().responses.at(-1), { id: "live-1", markdown: "partial", status: "error", error: "generic failure", truncated: false });
+assert.deepEqual(failedState.snapshot().responses.at(-1), { id: "live-1", markdown: "partial", prompt: null, status: "error", error: "generic failure", truncated: false });
 const retryState = new ViewerState(); retryState.beginTurn(); retryState.stream("intermediate"); retryState.fail(); retryState.stream("retry-final"); retryState.settle("generic failure");
 assert.deepEqual(retryState.snapshot().responses.map(response => [response.markdown, response.status, response.error]), [["retry-final", "complete", null]], "a retry after failure retains one successful response");
 const segmentState = new ViewerState(); segmentState.beginTurn();
@@ -195,7 +256,7 @@ assert.equal(splitState.splitTurn("generic failure"), true);
 splitState.stream("answered again"); splitState.settle();
 assert.deepEqual(splitState.snapshot().responses.map(response => [response.markdown, response.status]), [["answered", "complete"], ["answered again", "complete"]], "an injected prompt ends one response and opens the next");
 
-const state = new ViewerState(); state.restore([{ id: "previous", markdown: "previous", status: "complete", error: null, truncated: false }]); state.beginTurn(); state.stream("# current");
+const state = new ViewerState(); state.restore([{ id: "previous", markdown: "previous", prompt: null, status: "complete", error: null, truncated: false }]); state.beginTurn(); state.stream("# current");
 const viewer = await startViewerServer(here, () => state.snapshot());
 const url = new URL(viewer.url);
 type Result = { status: number; headers: Record<string, string | string[] | undefined>; body: string };
