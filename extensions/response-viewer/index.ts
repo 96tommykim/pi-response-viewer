@@ -57,7 +57,7 @@ export function createResponseViewer(pi: ExtensionAPI, supplied: Partial<ViewerD
 	};
 	const restore = (ctx: ModeContext) => {
 		const history = ctx.sessionManager?.getBranch?.();
-		state.restore(history ? responseHistory(history) : []);
+		state.restore(history ? responseHistory(history, state.nonce) : []);
 		publish(true);
 	};
 	const start = async (ctx: ModeContext) => {
@@ -65,7 +65,7 @@ export function createResponseViewer(pi: ExtensionAPI, supplied: Partial<ViewerD
 		browser.opened = false;
 		if (!enabled) return;
 		const history = ctx.sessionManager?.getBranch?.();
-		state.restore(history ? responseHistory(history) : []);
+		state.restore(history ? responseHistory(history, state.nonce) : []);
 		try {
 			server = await dependencies.startServer(dependencies.directory, () => state.snapshot());
 			publish(true);

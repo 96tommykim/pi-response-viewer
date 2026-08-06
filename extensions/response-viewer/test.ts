@@ -16,18 +16,65 @@ const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 const textMessage = (text: string, stopReason?: string, errorMessage?: string) => ({ role: "assistant", content: [{ type: "text", text }], stopReason, errorMessage });
 
 assert.equal(assistantText({ role: "assistant", content: [{ type: "thinking", thinking: "hidden" }, { type: "toolCall", name: "read" }, { type: "text", text: "visible" }] }), "visible");
+const restoreNonce = "restore-nonce";
 const grouped = responseHistory([
-	{ type: "message", id: "user-one", message: { role: "user", content: [{ type: "text", text: "must never leak" }] } },
+	{ type: "message", id: "user-one", message: { role: "user", content: [{ type: "text", text: "first question" }] } },
 	{ type: "message", message: textMessage("tool-intermediate") },
-	{ type: "message", message: { role: "tool", content: [{ type: "text", text: "tool result must never leak" }] } },
+	{ type: "message", message: { role: "assistant", content: [{ type: "toolCall", id: "t1", name: "Read", arguments: { file_path: "a.ts" } }] } },
+	{ type: "message", message: { role: "toolResult", toolCallId: "t1", content: [{ type: "text", text: "file body" }], isError: false } },
 	{ type: "message", message: textMessage("assistant-final") },
-	{ type: "message", id: "user-two", message: { role: "user", content: [{ type: "text", text: "also hidden" }] } },
+	{ type: "message", id: "user-two", message: { role: "user", content: [{ type: "text", text: "second question" }] } },
 	{ type: "message", message: textMessage("next-final") },
 	{ type: "message", message: textMessage("provider error text", "error") },
 	{ type: "message", message: textMessage("aborted text", "aborted") },
-]);
-assert.deepEqual(grouped.map(response => [response.id, response.markdown]), [["user-one", `tool-intermediate${SEGMENT_SEPARATOR}assistant-final`], ["user-two", "next-final"]], "a restored turn keeps every assistant message, not only the last");
-assert.doesNotMatch(JSON.stringify(grouped), /must never leak|tool result|provider error text|aborted text/);
+	{ type: "modelChange", model: "some-model" },
+], restoreNonce);
+assert.equal(grouped.length, 2, "one response per user turn");
+assert.equal(grouped[0].prompt?.text, "first question", "restored responses carry their prompt");
+assert.equal(grouped[1].prompt?.text, "second question");
+const restoredStep = grouped[0].markdown.split(SEGMENT_SEPARATOR).map(segment => parseToolStep(segment, restoreNonce)).find(Boolean);
+assert.equal(restoredStep?.status, "ok", "a restored tool step is matched with its result");
+assert.equal(restoredStep?.result, "file body");
+assert.match(grouped[0].markdown, /assistant-final/);
+assert.doesNotMatch(grouped[1].markdown, /provider error text|aborted text/, "failed messages stay out of history");
+
+// A restored toolResult whose id matches nothing pending must be skipped without throwing, and an
+// isError result must close the step as "error" (not left "running") with its text attached.
+const unmatchedRestore = responseHistory([
+	{ type: "message", id: "user-unmatched", message: { role: "user", content: [{ type: "text", text: "q" }] } },
+	{ type: "message", message: { role: "assistant", content: [{ type: "toolCall", id: "real-call", name: "Bash", arguments: { command: "npm test" } }] } },
+	{ type: "message", message: { role: "toolResult", toolCallId: "no-such-call", content: [{ type: "text", text: "orphan result" }], isError: false } },
+	{ type: "message", message: { role: "toolResult", toolCallId: "real-call", content: [{ type: "text", text: "test failed" }], isError: true } },
+], restoreNonce);
+assert.doesNotThrow(() => responseHistory([
+	{ type: "message", message: { role: "toolResult", toolCallId: "no-such-call", content: [{ type: "text", text: "orphan" }], isError: false } },
+], restoreNonce), "an unmatched restored toolResult is skipped, not thrown on");
+const unmatchedStep = unmatchedRestore[0].markdown.split(SEGMENT_SEPARATOR).map(segment => parseToolStep(segment, restoreNonce)).find(Boolean);
+assert.equal(unmatchedStep?.status, "error", "a restored isError result closes the step as error, not running");
+assert.equal(unmatchedStep?.result, "test failed");
+assert.doesNotMatch(JSON.stringify(unmatchedRestore), /orphan result/, "a toolResult matching no pending step attaches nowhere");
+
+// The restored and live paths share one converter; the same message sequence must produce identical
+// markdown through both. Same nonce on both sides isolates the comparison to segment content/order.
+const equivEntries = [
+	{ role: "assistant", content: [{ type: "text", text: "tool-intermediate" }] },
+	{ role: "assistant", content: [{ type: "toolCall", id: "eq-1", name: "Read", arguments: { file_path: "a.ts" } }] },
+	{ role: "toolResult", toolCallId: "eq-1", content: [{ type: "text", text: "file body" }], isError: false },
+	{ role: "assistant", content: [{ type: "text", text: "assistant-final" }] },
+];
+const liveEquivState = new ViewerState();
+liveEquivState.beginTurn();
+for (const message of equivEntries) {
+	if (message.role === "toolResult") liveEquivState.completeStep(message.toolCallId as string, messageText(message), message.isError === true);
+	else liveEquivState.commitMessage(message);
+}
+liveEquivState.settle();
+const liveEquivMarkdown = liveEquivState.snapshot().responses.at(-1)!.markdown;
+const restoredEquiv = responseHistory([
+	{ type: "message", id: "equiv-user", message: { role: "user", content: [] } },
+	...equivEntries.map(message => ({ type: "message", message })),
+], liveEquivState.nonce);
+assert.equal(restoredEquiv[0].markdown, liveEquivMarkdown, "restored and live paths converge on the same markdown for the same message sequence");
 
 // --- turn context: pure conversion ---
 const NONCE = "test-nonce";
@@ -157,8 +204,8 @@ const survived = survivalState.snapshot().responses.at(-1)!;
 assert.equal(Buffer.byteLength(survived.markdown, "utf8") <= MAX_RESPONSE_BYTES, true, "the response stays within budget");
 assert.match(survived.markdown, /^x+$/, "the newest oversized message remains visible and coherent");
 
-assert.deepEqual(responseHistory([{ id: "assistant-before-user", message: textMessage("orphan") }, { id: "no-id", message: { role: "user", content: [] } }, { message: textMessage("visible") }]).map(response => [response.id, response.markdown]), [["restored-1", "orphan"], ["no-id", "visible"]]);
-assert.deepEqual(responseHistory([{ message: { role: "user", content: [] } }, { message: textMessage("") }]), []);
+assert.deepEqual(responseHistory([{ type: "message", id: "assistant-before-user", message: textMessage("orphan") }, { type: "message", id: "no-id", message: { role: "user", content: [] } }, { type: "message", message: textMessage("visible") }], NONCE).map(response => [response.id, response.markdown]), [["restored-1", "orphan"], ["no-id", "visible"]]);
+assert.deepEqual(responseHistory([{ type: "message", message: { role: "user", content: [] } }, { type: "message", message: textMessage("") }], NONCE), []);
 assert.equal(viewerEnabled({ mode: "rpc" }), false);
 assert.equal(openCommand("http://127.0.0.1/example")?.args.includes("http://127.0.0.1/example"), true);
 const launches: string[] = [], browser = { opened: false };
@@ -270,7 +317,7 @@ assert.equal(longResponse.markdown.startsWith("B"), true, "an oversized turn dro
 assert.equal(longResponse.markdown.includes(`${SEGMENT_SEPARATOR}C`), true, "the newest message of an oversized turn stays visible");
 assert.equal(longResponse.truncated, true, "dropping a message marks the response truncated");
 assert.equal(Buffer.byteLength(longResponse.markdown, "utf8") <= MAX_RESPONSE_BYTES, true);
-const restoredLong = responseHistory([{ id: "long-turn", message: { role: "user", content: [] } }, ...["A", "B", "C"].map(mark => ({ message: textMessage(bigSegment(mark)) }))]);
+const restoredLong = responseHistory([{ type: "message", id: "long-turn", message: { role: "user", content: [] } }, ...["A", "B", "C"].map(mark => ({ type: "message", message: textMessage(bigSegment(mark)) }))], NONCE);
 assert.equal(restoredLong.length, 1);
 assert.equal(restoredLong[0].markdown.startsWith("B"), true, "restore drops the oldest messages of an oversized turn too");
 assert.equal(restoredLong[0].markdown.includes(`${SEGMENT_SEPARATOR}C`), true);
@@ -361,7 +408,7 @@ const dependencies: Partial<ViewerDependencies> = {
 };
 createResponseViewer(mockPi as unknown as ExtensionAPI, dependencies);
 const fire = async (event: string, payload: unknown, context: unknown) => { const handler = handlers.get(event); assert.ok(handler, `missing ${event}`); await handler(payload, context); };
-let branch: unknown[] = [{ message: textMessage("restored") }];
+let branch: unknown[] = [{ type: "message", message: textMessage("restored") }];
 const tuiContext = { mode: "tui", sessionManager: { getBranch: () => branch }, ui: { notify: () => undefined } };
 const savedChild = process.env.PI_SUBAGENT_CHILD;
 const restoreChild = () => { if (savedChild === undefined) delete process.env.PI_SUBAGENT_CHILD; else process.env.PI_SUBAGENT_CHILD = savedChild; };
@@ -419,10 +466,12 @@ assert.doesNotMatch(steered.responses.map(response => response.markdown).join("\
 // so the steering prompt must attach to the response it newly opens, not the one the split just settled.
 assert.equal(steered.responses.at(-1)?.prompt?.text, "steering prompt stays out of the body", "the steering prompt attaches to the response it opens");
 assert.equal(steered.responses.at(-2)?.prompt?.text, "ordinary prompt stays out of the body", "the response settled by the split keeps the prompt it already had, not the steering prompt");
-branch = [{ id: "tree-user", message: { role: "user", content: [{ type: "text", text: "hidden tree prompt" }] } }, { message: textMessage("tree-restored") }];
+branch = [{ type: "message", id: "tree-user", message: { role: "user", content: [{ type: "text", text: "tree prompt stays out of the body" }] } }, { type: "message", message: textMessage("tree-restored") }];
 await fire("session_tree", {}, tuiContext);
-assert.equal(latestResponse(fakeServers[0].publishes.at(-1)!.snapshot)?.markdown, "tree-restored");
-assert.doesNotMatch(JSON.stringify(fakeServers[0].publishes.at(-1)!.snapshot), /hidden tree prompt/);
+const treeSnapshot = fakeServers[0].publishes.at(-1)!.snapshot;
+assert.equal(latestResponse(treeSnapshot)?.markdown, "tree-restored");
+assert.doesNotMatch(treeSnapshot.responses.map(response => response.markdown).join("\n"), /tree prompt stays out of the body/, "a restored prompt never enters the rendered body");
+assert.equal(latestResponse(treeSnapshot)?.prompt?.text, "tree prompt stays out of the body", "session_tree restore carries the prompt in its own field");
 assert.equal(fakeServers[0].publishes.at(-1)!.immediate, true);
 await viewerCommand!.handler("", tuiContext); assert.deepEqual(lifecycleLaunches, [fakeServers[0].url, fakeServers[0].url]);
 await fire("session_start", {}, tuiContext);
@@ -570,7 +619,7 @@ const toggleDependencies: Partial<ViewerDependencies> = {
 	},
 };
 createResponseViewer(togglePi as unknown as ExtensionAPI, toggleDependencies);
-const toggleBranch: unknown[] = [{ message: textMessage("toggle-restored") }];
+const toggleBranch: unknown[] = [{ type: "message", message: textMessage("toggle-restored") }];
 const toggleContext = { mode: "tui", sessionManager: { getBranch: () => toggleBranch }, ui: { notify: (text: string, level?: string) => toggleNotifications.push({ text, level }) } };
 const toggleFire = async (event: string, payload: unknown, context: unknown) => { const handler = toggleHandlers.get(event); assert.ok(handler, `missing ${event}`); await handler(payload, context); };
 await toggleFire("session_start", {}, toggleContext);

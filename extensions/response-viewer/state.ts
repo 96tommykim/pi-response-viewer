@@ -22,7 +22,7 @@ export type ViewerSnapshot = Readonly<{
 	nonce: string;
 }>;
 
-type AssistantLike = { role?: unknown; content?: unknown; stopReason?: unknown; errorMessage?: unknown };
+type AssistantLike = { role?: unknown; content?: unknown; stopReason?: unknown; errorMessage?: unknown; toolCallId?: unknown; isError?: unknown };
 type EntryLike = { type?: unknown; id?: unknown; message?: AssistantLike };
 
 export const MAX_RESPONSES = 30;
@@ -224,39 +224,56 @@ export function messageText(message: unknown): string {
 	return content.filter(part => partType(part) === "text").map(part => partString(part, "text")).join("");
 }
 
-const messageOf = (entry: unknown): AssistantLike | undefined => entry && typeof entry === "object" && "message" in entry
-	? (entry as EntryLike).message
-	: entry as AssistantLike;
+/** Only `SessionMessageEntry` carries a message; the other eight entry types are skipped. */
+const messageOf = (entry: unknown): AssistantLike | undefined => {
+	if (!entry || typeof entry !== "object") return undefined;
+	const typed = entry as EntryLike;
+	return typed.type === "message" ? typed.message : undefined;
+};
 const entryId = (entry: unknown): string | undefined => entry && typeof entry === "object" && typeof (entry as EntryLike).id === "string" && (entry as EntryLike).id
 	? (entry as EntryLike).id as string
 	: undefined;
 
 /** Group persisted branch messages into one visible response for each user turn. */
-export function responseHistory(entries: Iterable<unknown>): ViewerResponse[] {
+export function responseHistory(entries: Iterable<unknown>, nonce: string): ViewerResponse[] {
 	const result: ViewerResponse[] = [];
-	let pending: { id: string; segments: string[] } | undefined;
+	let pending: { id: string; segments: string[]; prompt: ViewerPrompt | null } | undefined;
 	let restored = 0;
 	const nextRestoredId = () => `restored-${++restored}`;
+	const startPending = (id: string) => ({ id, segments: [] as string[], prompt: null as ViewerPrompt | null });
 	const flush = () => {
 		const newest = pending?.segments.at(-1);
 		if (!pending || !newest) return;
 		const { markdown, truncated } = fitSegments(pending.segments.slice(0, -1), newest);
 		if (!markdown.trim()) return;
-		result.push({ id: pending.id, markdown, prompt: null, status: "complete", error: null, truncated });
+		result.push({ id: pending.id, markdown, prompt: pending.prompt, status: "complete", error: null, truncated });
 	};
 	for (const entry of entries) {
 		const message = messageOf(entry);
 		if (!message) continue;
 		if (message.role === "user") {
 			flush();
-			pending = { id: entryId(entry) ?? nextRestoredId(), segments: [] };
+			pending = startPending(entryId(entry) ?? nextRestoredId());
+			const text = truncateUtf8(messageText(message), PROMPT_BYTES);
+			if (text.trim()) pending.prompt = { text, truncated: text.length < messageText(message).length };
+			continue;
+		}
+		if (message.role === "toolResult") {
+			const id = (message as { toolCallId?: unknown }).toolCallId;
+			if (!pending || typeof id !== "string") continue;
+			const index = findToolStep(pending.segments, id, nonce);
+			if (index < 0) continue;
+			const step = parseToolStep(pending.segments[index], nonce);
+			if (!step) continue;
+			const { text, truncated } = capText(messageText(message), TOOL_RESULT_BYTES);
+			pending.segments[index] = toolStepSegment(nonce, { ...step, status: (message as { isError?: unknown }).isError === true ? "error" : "ok", result: text, truncated });
 			continue;
 		}
 		if (message.role !== "assistant" || message.stopReason === "error" || message.stopReason === "aborted") continue;
-		const text = assistantText(message);
-		if (!text.trim()) continue;
-		if (!pending) pending = { id: nextRestoredId(), segments: [] };
-		pending.segments.push(closeOpenFence(text));
+		const segments = contentSegments(message, nonce);
+		if (!segments.length) continue;
+		if (!pending) pending = startPending(nextRestoredId());
+		pending.segments.push(...segments);
 	}
 	flush();
 	return result;
