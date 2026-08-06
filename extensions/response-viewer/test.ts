@@ -7,7 +7,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runInNewContext } from "node:vm";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { assistantText, closeOpenFence, MAX_RESPONSE_BYTES, MAX_RESPONSES, responseHistory, SEGMENT_SEPARATOR, ViewerState, type ViewerSnapshot } from "./state.ts";
+import { assistantText, closeOpenFence, contentSegments, MAX_RESPONSE_BYTES, MAX_RESPONSES, parseToolStep, PROMPT_BYTES, responseHistory, SEGMENT_SEPARATOR, summarizeArguments, THINKING_BYTES, thinkingSegment, toolResultText, toolStepSegment, ViewerState, type ViewerSnapshot } from "./state.ts";
 import { SseClients, startViewerServer, type SseResponse, type ViewerServer } from "./server.ts";
 import { createResponseViewer, openCommand, openOnce, openViewer, viewerEnabled, type ViewerDependencies } from "./index.ts";
 
@@ -28,6 +28,47 @@ const grouped = responseHistory([
 ]);
 assert.deepEqual(grouped.map(response => [response.id, response.markdown]), [["user-one", `tool-intermediate${SEGMENT_SEPARATOR}assistant-final`], ["user-two", "next-final"]], "a restored turn keeps every assistant message, not only the last");
 assert.doesNotMatch(JSON.stringify(grouped), /must never leak|tool result|provider error text|aborted text/);
+
+// --- turn context: pure conversion ---
+const NONCE = "test-nonce";
+assert.equal(summarizeArguments({ command: "npm  test\n--silent" }), "npm test --silent", "command wins and whitespace collapses");
+assert.equal(summarizeArguments({ file_path: "a/b.ts", command: "ls" }), "ls", "key precedence is command before file_path");
+assert.equal(summarizeArguments({ pattern: "foo" }), "foo");
+assert.equal(summarizeArguments({ weird: 3 }), '{"weird":3}', "unknown shapes fall back to JSON");
+assert.equal(summarizeArguments(undefined), "{}");
+assert.equal(summarizeArguments({ command: "x".repeat(200) }), `${"x".repeat(120)}…`, "summary is cut at SUMMARY_CHARS");
+
+const stepSegment = toolStepSegment(NONCE, { name: "Read", summary: "a.ts", status: "running", result: "", truncated: false });
+assert.equal(stepSegment.split("\n").length, 3, "fence payload is a single line");
+assert.deepEqual(parseToolStep(stepSegment, NONCE), { name: "Read", summary: "a.ts", status: "running", result: "", truncated: false });
+assert.equal(parseToolStep(stepSegment, "other-nonce"), null, "a foreign nonce does not parse");
+assert.equal(parseToolStep("```pi-tool\nnot json\n```", NONCE), null, "malformed payload does not parse");
+
+const backtickStep = toolStepSegment(NONCE, { name: "Bash", summary: "echo", status: "ok", result: "```\nrm -rf /\n```", truncated: false });
+assert.equal(closeOpenFence(backtickStep), backtickStep, "a result containing fences does not leave the segment open");
+
+const converted = contentSegments({
+	role: "assistant",
+	content: [
+		{ type: "thinking", thinking: "reasoning" },
+		{ type: "text", text: "answer" },
+		{ type: "toolCall", id: "call-1", name: "Read", arguments: { file_path: "a.ts" } },
+	],
+}, NONCE);
+assert.equal(converted.segments.length, 3, "each content block becomes one segment");
+assert.deepEqual(converted.toolCallIds, [undefined, undefined, "call-1"], "source order is preserved");
+assert.match(converted.segments[0], /^```pi-think\n/);
+assert.equal(converted.segments[1], "answer");
+assert.equal(parseToolStep(converted.segments[2], NONCE)?.summary, "a.ts");
+assert.deepEqual(contentSegments({ role: "assistant", content: [{ type: "text", text: "   " }] }, NONCE).segments, [], "blank text produces no segment");
+assert.deepEqual(contentSegments(undefined, NONCE).segments, [], "a missing message produces no segment");
+
+const longThinking = thinkingSegment(NONCE, "t".repeat(THINKING_BYTES + 500));
+assert.equal(JSON.parse(longThinking.split("\n")[1]).truncated, true, "thinking over the cap is flagged");
+assert.equal(JSON.parse(longThinking.split("\n")[1]).thinking.length, THINKING_BYTES, "thinking is cut at THINKING_BYTES");
+
+assert.equal(toolResultText({ role: "toolResult", content: [{ type: "text", text: "out" }, { type: "image" }] }), "out");
+assert.equal(toolResultText({ role: "toolResult" }), "");
 assert.deepEqual(responseHistory([{ id: "assistant-before-user", message: textMessage("orphan") }, { id: "no-id", message: { role: "user", content: [] } }, { message: textMessage("visible") }]).map(response => [response.id, response.markdown]), [["restored-1", "orphan"], ["no-id", "visible"]]);
 assert.deepEqual(responseHistory([{ message: { role: "user", content: [] } }, { message: textMessage("") }]), []);
 assert.equal(viewerEnabled({ mode: "rpc" }), false);

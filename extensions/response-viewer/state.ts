@@ -23,10 +23,26 @@ export const MAX_RESPONSES = 30;
 export const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 /** A turn speaks once per assistant message. The rule marks where tool work happened between them. */
 export const SEGMENT_SEPARATOR = "\n\n---\n\n";
+export const TOOL_RESULT_BYTES = 8 * 1024;
+export const THINKING_BYTES = 8 * 1024;
+export const PROMPT_BYTES = 2 * 1024;
+export const SUMMARY_CHARS = 120;
 
 const joinSegments = (segments: readonly string[]): string => segments.filter(segment => segment.trim()).join(SEGMENT_SEPARATOR);
 
 const utf8Bytes = (value: string) => Buffer.byteLength(value, "utf8");
+
+const truncateUtf8 = (value: string, limit: number): string => {
+	let bytes = 0;
+	let end = 0;
+	for (const character of value) {
+		const size = utf8Bytes(character);
+		if (bytes + size > limit) break;
+		bytes += size;
+		end += character.length;
+	}
+	return value.slice(0, end);
+};
 
 /**
  * A turn holds every message of one prompt, so it can outgrow the byte cap on its own. Drop whole
@@ -77,6 +93,106 @@ export function assistantText(message: AssistantLike | undefined): string {
 		.join("");
 }
 
+export type ToolStep = Readonly<{ name: string; summary: string; status: "running" | "ok" | "error"; result: string; truncated: boolean }>;
+
+const SUMMARY_KEYS = ["command", "file_path", "path", "pattern", "url", "query"] as const;
+
+/** One line naming what a tool was asked to do. Never includes the result. */
+export function summarizeArguments(args: unknown): string {
+	const record = args && typeof args === "object" ? args as Record<string, unknown> : {};
+	let raw = "";
+	for (const key of SUMMARY_KEYS) {
+		const value = record[key];
+		if (typeof value === "string" && value.trim()) { raw = value; break; }
+	}
+	if (!raw) { try { raw = JSON.stringify(record) ?? "{}"; } catch { raw = "{}"; } }
+	const flat = raw.replace(/\s+/g, " ").trim();
+	return flat.length > SUMMARY_CHARS ? `${flat.slice(0, SUMMARY_CHARS)}…` : flat;
+}
+
+const capText = (value: string, limit: number): { text: string; truncated: boolean } => {
+	const text = truncateUtf8(value, limit);
+	return { text, truncated: text.length < value.length };
+};
+
+/**
+ * Payloads are single-line JSON so no body line can start with a backtick run and close the fence
+ * early. The nonce lives in the payload rather than the info string: the client derives the fence
+ * language from a `language-…` class name, which must stay a plain identifier.
+ */
+const fenceSegment = (language: string, payload: unknown): string => `\`\`\`${language}\n${JSON.stringify(payload)}\n\`\`\``;
+
+export function toolStepSegment(nonce: string, step: ToolStep): string {
+	return fenceSegment("pi-tool", { nonce, name: step.name, summary: step.summary, status: step.status, result: step.result, truncated: step.truncated });
+}
+
+export function thinkingSegment(nonce: string, thinking: string): string {
+	const { text, truncated } = capText(thinking, THINKING_BYTES);
+	return fenceSegment("pi-think", { nonce, thinking: text, truncated });
+}
+
+export function parseToolStep(segment: string, nonce: string): ToolStep | null {
+	const lines = segment.split("\n");
+	if (lines.length !== 3 || lines[0] !== "```pi-tool") return null;
+	try {
+		const payload = JSON.parse(lines[1]) as Record<string, unknown>;
+		if (payload.nonce !== nonce) return null;
+		const status = payload.status;
+		if (status !== "running" && status !== "ok" && status !== "error") return null;
+		return {
+			name: typeof payload.name === "string" ? payload.name : "tool",
+			summary: typeof payload.summary === "string" ? payload.summary : "",
+			status,
+			result: typeof payload.result === "string" ? payload.result : "",
+			truncated: payload.truncated === true,
+		};
+	} catch { return null; }
+}
+
+const partType = (part: unknown): unknown => part && typeof part === "object" ? (part as { type?: unknown }).type : undefined;
+const partString = (part: unknown, key: string): string => {
+	const value = part && typeof part === "object" ? (part as Record<string, unknown>)[key] : undefined;
+	return typeof value === "string" ? value : "";
+};
+
+/**
+ * Convert one message into ordered segments. Tool steps get their own segment so a `toolResult`
+ * arriving later can replace them by index instead of editing inside a larger string.
+ */
+export function contentSegments(message: unknown, nonce: string): { segments: string[]; toolCallIds: (string | undefined)[] } {
+	const segments: string[] = [];
+	const toolCallIds: (string | undefined)[] = [];
+	const content = message && typeof message === "object" ? (message as { content?: unknown }).content : undefined;
+	if (!Array.isArray(content)) return { segments, toolCallIds };
+	for (const part of content) {
+		const type = partType(part);
+		if (type === "text") {
+			const text = partString(part, "text");
+			if (!text.trim()) continue;
+			segments.push(closeOpenFence(text));
+			toolCallIds.push(undefined);
+		} else if (type === "thinking") {
+			const thinking = partString(part, "thinking");
+			if (!thinking.trim()) continue;
+			segments.push(thinkingSegment(nonce, thinking));
+			toolCallIds.push(undefined);
+		} else if (type === "toolCall") {
+			const name = partString(part, "name") || "tool";
+			const args = part && typeof part === "object" ? (part as { arguments?: unknown }).arguments : undefined;
+			segments.push(toolStepSegment(nonce, { name, summary: summarizeArguments(args), status: "running", result: "", truncated: false }));
+			toolCallIds.push(partString(part, "id") || undefined);
+		}
+	}
+	return { segments, toolCallIds };
+}
+
+/** Visible text of a `toolResult` message. Images and other blocks are dropped. */
+export function toolResultText(message: unknown): string {
+	const content = message && typeof message === "object" ? (message as { content?: unknown }).content : undefined;
+	if (!Array.isArray(content)) return "";
+	return content.filter(part => partType(part) === "text").map(part => partString(part, "text")).join("");
+}
+
 const messageOf = (entry: unknown): AssistantLike | undefined => entry && typeof entry === "object" && "message" in entry
 	? (entry as EntryLike).message
 	: entry as AssistantLike;
@@ -115,17 +231,6 @@ export function responseHistory(entries: Iterable<unknown>): ViewerResponse[] {
 	return result;
 }
 
-const truncateUtf8 = (value: string, limit: number): string => {
-	let bytes = 0;
-	let end = 0;
-	for (const character of value) {
-		const size = utf8Bytes(character);
-		if (bytes + size > limit) break;
-		bytes += size;
-		end += character.length;
-	}
-	return value.slice(0, end);
-};
 const copyResponse = (response: ViewerResponse): ViewerResponse => ({ ...response });
 
 /** In-memory response history. It never receives user content and is bounded by count and UTF-8 bytes. */
