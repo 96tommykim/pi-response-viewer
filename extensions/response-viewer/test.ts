@@ -54,10 +54,49 @@ assert.equal(unmatchedStep?.status, "error", "a restored isError result closes t
 assert.equal(unmatchedStep?.result, "test failed");
 assert.doesNotMatch(JSON.stringify(unmatchedRestore), /orphan result/, "a toolResult matching no pending step attaches nowhere");
 
+// A restored branch whose last assistant message opens a toolCall with no matching toolResult (an
+// interrupted session, entirely ordinary for a coding agent) must not restore as a spinner inside a
+// response stamped "complete" — the running step is closed to "error"/"Interrupted." on restore too.
+const orphanedRestore = responseHistory([
+	{ type: "message", id: "user-orphan", message: { role: "user", content: [{ type: "text", text: "q" }] } },
+	{ type: "message", message: textMessage("looking now") },
+	{ type: "message", message: { role: "assistant", content: [{ type: "toolCall", id: "orphan-call", name: "Bash", arguments: { command: "long job" } }] } },
+], restoreNonce);
+assert.equal(orphanedRestore[0].status, "complete", "a restored turn is never left in a non-terminal status");
+const orphanedStep = orphanedRestore[0].markdown.split(SEGMENT_SEPARATOR).map(segment => parseToolStep(segment, restoreNonce)).find(Boolean);
+assert.equal(orphanedStep?.status, "error", "a step still running when the branch ends is closed as an error on restore");
+assert.equal(orphanedStep?.result, "Interrupted.");
+
+// Two toolResult entries for the same toolCallId: the first delivery wins, exactly as completeStep
+// does live — the restore path must not be last-write-wins while the live path is first-write-wins.
+const duplicateRestore = responseHistory([
+	{ type: "message", id: "user-dup", message: { role: "user", content: [{ type: "text", text: "q" }] } },
+	{ type: "message", message: { role: "assistant", content: [{ type: "toolCall", id: "dup-call", name: "Bash", arguments: { command: "npm test" } }] } },
+	{ type: "message", message: { role: "toolResult", toolCallId: "dup-call", content: [{ type: "text", text: "first result" }], isError: false } },
+	{ type: "message", message: { role: "toolResult", toolCallId: "dup-call", content: [{ type: "text", text: "second result" }], isError: true } },
+], restoreNonce);
+const duplicateStep = duplicateRestore[0].markdown.split(SEGMENT_SEPARATOR).map(segment => parseToolStep(segment, restoreNonce)).find(Boolean);
+assert.equal(duplicateStep?.status, "ok", "the first delivered toolResult wins on restore");
+assert.equal(duplicateStep?.result, "first result");
+
+// The ordering trap: closing an orphaned step must run BEFORE `newest` is read in flush(), or closing
+// the step that happens to be the LAST segment leaves `newest` holding a stale (still-"running") copy
+// that fitSegments then re-appends. A fixture that only orphans a middle segment would not catch this.
+const orphanedLastRestore = responseHistory([
+	{ type: "message", id: "user-orphan-last", message: { role: "user", content: [{ type: "text", text: "q" }] } },
+	{ type: "message", message: { role: "assistant", content: [{ type: "toolCall", id: "trailing-call", name: "Bash", arguments: { command: "still running" } }] } },
+], restoreNonce);
+const trailingSegments = orphanedLastRestore[0].markdown.split(SEGMENT_SEPARATOR);
+assert.equal(trailingSegments.length, 1, "the orphaned step is the only, and last, segment");
+const trailingStep = parseToolStep(trailingSegments.at(-1), restoreNonce);
+assert.equal(trailingStep?.status, "error", "an orphaned step that is the last segment is still closed, not left running");
+assert.equal(trailingStep?.result, "Interrupted.");
+
 // The restored and live paths share one converter; the same message sequence must produce identical
 // markdown through both. Same nonce on both sides isolates the comparison to segment content/order.
+// Covers all three segment kinds: thinking, text, and a tool step with its result.
 const equivEntries = [
-	{ role: "assistant", content: [{ type: "text", text: "tool-intermediate" }] },
+	{ role: "assistant", content: [{ type: "thinking", thinking: "considering the request" }, { type: "text", text: "tool-intermediate" }] },
 	{ role: "assistant", content: [{ type: "toolCall", id: "eq-1", name: "Read", arguments: { file_path: "a.ts" } }] },
 	{ role: "toolResult", toolCallId: "eq-1", content: [{ type: "text", text: "file body" }], isError: false },
 	{ role: "assistant", content: [{ type: "text", text: "assistant-final" }] },

@@ -242,8 +242,17 @@ export function responseHistory(entries: Iterable<unknown>, nonce: string): View
 	const nextRestoredId = () => `restored-${++restored}`;
 	const startPending = (id: string) => ({ id, segments: [] as string[], prompt: null as ViewerPrompt | null });
 	const flush = () => {
-		const newest = pending?.segments.at(-1);
-		if (!pending || !newest) return;
+		if (!pending) return;
+		// A persisted branch can end mid-tool-call — an interrupted session is ordinary for a coding
+		// agent. The live path closes such steps in settle(); a restored one must too, or the reader
+		// shows a spinner inside a response stamped "complete". Runs before `newest` is read, since
+		// closing the last segment would otherwise leave a stale copy of it.
+		pending.segments.forEach((segment, index) => {
+			const step = parseToolStep(segment, nonce);
+			if (step?.status === "running") pending!.segments[index] = toolStepSegment(nonce, { ...step, status: "error", result: "Interrupted." });
+		});
+		const newest = pending.segments.at(-1);
+		if (!newest) return;
 		const { markdown, truncated } = fitSegments(pending.segments.slice(0, -1), newest);
 		if (!markdown.trim()) return;
 		result.push({ id: pending.id, markdown, prompt: pending.prompt, status: "complete", error: null, truncated });
@@ -254,8 +263,8 @@ export function responseHistory(entries: Iterable<unknown>, nonce: string): View
 		if (message.role === "user") {
 			flush();
 			pending = startPending(entryId(entry) ?? nextRestoredId());
-			const text = truncateUtf8(messageText(message), PROMPT_BYTES);
-			if (text.trim()) pending.prompt = { text, truncated: text.length < messageText(message).length };
+			const { text, truncated } = capText(messageText(message), PROMPT_BYTES);
+			if (text.trim()) pending.prompt = { text, truncated };
 			continue;
 		}
 		if (message.role === "toolResult") {
@@ -264,7 +273,7 @@ export function responseHistory(entries: Iterable<unknown>, nonce: string): View
 			const index = findToolStep(pending.segments, id, nonce);
 			if (index < 0) continue;
 			const step = parseToolStep(pending.segments[index], nonce);
-			if (!step) continue;
+			if (!step || step.status !== "running") continue; // First delivery wins, as in completeStep.
 			const { text, truncated } = capText(messageText(message), TOOL_RESULT_BYTES);
 			pending.segments[index] = toolStepSegment(nonce, { ...step, status: (message as { isError?: unknown }).isError === true ? "error" : "ok", result: text, truncated });
 			continue;
