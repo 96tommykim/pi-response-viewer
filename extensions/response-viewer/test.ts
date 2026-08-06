@@ -739,5 +739,18 @@ assert.match(rendererSource, /(?:title|filename)/); assert.match(rendererSource,
 assert.doesNotMatch(mermaidViewSource, /https?:\/\//, "mermaid wrapper contains no remote URL");
 // The SVG namespace URI is a required literal, not a fetched remote reference.
 assert.match(treeViewSource, /http:\/\/www\.w3\.org\/2000\/svg/, "tree icons use the standard SVG namespace");
+const toolStepSource = await readFile(join(here, "tool-step-view.js"), "utf8");
+const thinkingSource = await readFile(join(here, "thinking-view.js"), "utf8");
+assert.match(toolStepSource, /ResponseViewerFences\.register\("pi-tool"/);
+assert.match(thinkingSource, /ResponseViewerFences\.register\("pi-think"/);
+assert.match(toolStepSource, /textContent/, "tool step text is inserted as text nodes");
+assert.doesNotMatch(`${toolStepSource}\n${thinkingSource}`, /innerHTML/, "the new renderers never use innerHTML");
+assert.match(client, /MAX_TOOL_FENCES/, "tool fences have their own budget");
+assert.match(client, /window\.ResponseViewerNonce/);
+assert.match(template, /tool-step-view\.js/);
+assert.match(template, /thinking-view\.js/);
+const serverSource = await readFile(join(here, "server.ts"), "utf8");
+assert.match(serverSource, /tool-step-view\.js/);
+assert.match(serverSource, /thinking-view\.js/);
 restoreChild(); process.removeListener("exit", restoreChild);
 console.log("PASS: response-viewer state, async spawn failure, bounded SSE, HTTP policy, links, lifecycle, viewer on/off, shutdown, and template shell");

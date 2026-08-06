@@ -111,6 +111,8 @@ export async function startViewerServer(directory: string, getState: () => Viewe
 		["/diff-view.js", { body: await readFile(join(directory, "diff-view.js")), type: "text/javascript; charset=utf-8" }],
 		["/json-view.js", { body: await readFile(join(directory, "json-view.js")), type: "text/javascript; charset=utf-8" }],
 		["/csv-view.js", { body: await readFile(join(directory, "csv-view.js")), type: "text/javascript; charset=utf-8" }],
+		["/tool-step-view.js", { body: await readFile(join(directory, "tool-step-view.js")), type: "text/javascript; charset=utf-8" }],
+		["/thinking-view.js", { body: await readFile(join(directory, "thinking-view.js")), type: "text/javascript; charset=utf-8" }],
 		["/navigator.js", { body: await readFile(join(directory, "navigator.js")), type: "text/javascript; charset=utf-8" }],
 		["/export-view.js", { body: await readFile(join(directory, "export-view.js")), type: "text/javascript; charset=utf-8" }],
 		...await Promise.all(["prism-core", "prism-markup", "prism-clike", "prism-javascript", "prism-typescript", "prism-go", "prism-python", "prism-bash", "prism-yaml", "prism-json", "prism-sql", "prism-hcl", "prism-docker", "prism-markdown"].map(async name => [`/vendor/${name}-1.30.0.min.js`, { body: await readFile(join(directory, "vendor", `${name}-1.30.0.min.js`)), type: "text/javascript; charset=utf-8" }] as const)),

@@ -4,7 +4,7 @@
   const body = $("response-body"), outline = $("outline-links"), outlinePanel = $("response-outline"), status = $("status"), title = $("response-title"), meta = $("response-meta"), newContent = $("new-content"), toolbar = document.querySelector(".toolbar"), historyControl = $("history-control"), previous = $("previous-response"), next = $("next-response"), historyPosition = $("history-position"), navigatorPanel = $("response-navigator"), navigatorRoot = $("navigator-list"), navigatorInput = $("navigator-search"), navigatorCount = $("navigator-count");
   const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)"), narrow = matchMedia("(max-width: 1180px)");
   let raw = "", renderedId = null, revision = -1, following = true, events, destroyed = false, reconnecting = false, scrollGuardUntil = 0, scrollRaf = 0, followRaf = 0, toggleRaf = 0, renderTimer = 0, pendingHash = "", outlineInitialized = false, headings = [], activeLink, snapshot, selectedId = null, pendingRender, responseNavigator, exporter;
-  const codePreferences = new Map(), maxCodePreferences = 256, MAX_SPECIAL_FENCES = 64;
+  const codePreferences = new Map(), maxCodePreferences = 256, MAX_SPECIAL_FENCES = 64, MAX_TOOL_FENCES = 256;
   const rememberCodePreference = (responseId, index, patch) => { let response = codePreferences.get(responseId); if (!response) { response = new Map(); codePreferences.set(responseId, response); } let preference = response.get(index); if (!preference) { if (response.size >= maxCodePreferences) return; preference = { wrapped: false, expanded: false }; response.set(index, preference); } Object.assign(preference, patch); if (!preference.wrapped && !preference.expanded) response.delete(index); if (!response.size) codePreferences.delete(responseId); };
   const pruneCodePreferences = responses => { const ids = new Set(responses.map(response => response.id)); for (const id of codePreferences.keys()) if (!ids.has(id)) codePreferences.delete(id); };
   const announce = text => { status.textContent = text; };
@@ -35,20 +35,25 @@
     const used = new Set(), allHeadings = [...body.querySelectorAll("h1,h2,h3,h4,h5,h6")], labels = new Map(allHeadings.map(h => [h, h.textContent || "Section"]));
     allHeadings.forEach(h => { const text = labels.get(h) || "Section"; h.id = slug(text, used); const link = document.createElement("a"); link.className = "heading-link"; link.href = `#${h.id}`; link.setAttribute("aria-label", `Link to ${text}`); link.textContent = "#"; link.addEventListener("click", pauseFollow); h.append(link); });
     headings = allHeadings.filter(h => h.matches("h1,h2,h3")); outline.replaceChildren(); headings.forEach(h => { const link = document.createElement("a"), text = labels.get(h) || "Section"; link.href = `#${h.id}`; link.textContent = text; link.title = text; link.dataset.level = h.tagName.slice(1); link.addEventListener("click", () => { pauseFollow(); scrollGuardUntil = performance.now() + 160; }); outline.append(link); });
-    let specialFenceCount = 0;
+    let specialFenceCount = 0, toolFenceCount = 0;
     body.querySelectorAll("pre").forEach((pre, index) => {
       const code = pre.querySelector("code"), plain = code?.textContent || "", language = code && window.ResponseViewerSyntax.languageFromCode(code), canonical = window.ResponseViewerSyntax.canonical(language), preference = codePreferences.get(responseId)?.get(index), wrapper = document.createElement("div"), label = document.createElement("div"), name = document.createElement("span"), actions = document.createElement("span");
       wrapper.className = "code-block"; label.className = "code-label"; name.className = "code-language"; name.textContent = code?.getAttribute("title") || canonical; name.title = canonical; actions.className = "code-actions";
       const action = (className, text, aria) => { const button = document.createElement("button"); button.className = className; button.type = "button"; button.textContent = text; button.setAttribute("aria-label", aria); actions.append(button); return button; };
       const copyButton = action("copy-code", "Copy", "Copy code"); copyButton.addEventListener("click", () => copy(plain, copyButton));
-      const special = specialFenceCount < MAX_SPECIAL_FENCES && language && window.ResponseViewerFences.render(language[0], { source: plain, pre });
-      if (special) specialFenceCount += 1;
+      const isContextFence = language && (language[0] === "pi-tool" || language[0] === "pi-think");
+      const budgetLeft = isContextFence ? toolFenceCount < MAX_TOOL_FENCES : specialFenceCount < MAX_SPECIAL_FENCES;
+      const special = budgetLeft && language && window.ResponseViewerFences.render(language[0], { source: plain, pre });
+      if (special && isContextFence) toolFenceCount += 1; else if (special) specialFenceCount += 1;
       if (!special) {
         const wrapButton = action("code-action code-wrap-toggle", "Wrap", "Wrap code lines"); const wrapped = Boolean(preference?.wrapped); pre.classList.toggle("code-wrapped", wrapped); wrapButton.setAttribute("aria-pressed", String(wrapped)); wrapButton.addEventListener("click", () => { const next = pre.classList.toggle("code-wrapped"); wrapButton.setAttribute("aria-pressed", String(next)); rememberCodePreference(responseId, index, { wrapped: next }); });
         const lines = plain ? plain.split(/\r?\n/).length : 1; if (lines > 24) { const expanded = Boolean(preference?.expanded); pre.classList.toggle("code-expanded", expanded); pre.classList.toggle("code-collapsed", !expanded); const expandButton = action("code-action code-expand-toggle", expanded ? "Collapse" : "Expand", expanded ? "Collapse code block" : "Expand code block"); expandButton.setAttribute("aria-expanded", String(expanded)); expandButton.addEventListener("click", () => { const next = pre.classList.toggle("code-expanded"); pre.classList.toggle("code-collapsed", !next); expandButton.textContent = next ? "Collapse" : "Expand"; expandButton.setAttribute("aria-expanded", String(next)); expandButton.setAttribute("aria-label", next ? "Collapse code block" : "Expand code block"); rememberCodePreference(responseId, index, { expanded: next }); }); }
       }
-      if (code) code.replaceChildren(window.ResponseViewerSyntax.highlight(plain, language)); label.append(name, actions); pre.replaceWith(wrapper);
-      if (special) wrapper.append(label, ...special.nodes); else wrapper.append(label, pre);
+      if (code) code.replaceChildren(window.ResponseViewerSyntax.highlight(plain, language));
+      label.append(name, actions); pre.replaceWith(wrapper);
+      if (special && special.bare) { wrapper.className = "context-block"; wrapper.append(...special.nodes); }
+      else if (special) wrapper.append(label, ...special.nodes);
+      else wrapper.append(label, pre);
     });
     body.querySelectorAll("table").forEach(table => { if (table.closest(".csv-view")) return; const wrap = document.createElement("div"); wrap.className = "table-wrap"; table.replaceWith(wrap); wrap.append(table); });
   };
@@ -89,6 +94,7 @@
   const receive = nextSnapshot => {
     if (!nextSnapshot || destroyed) return; if (nextSnapshot.status === "closed") { cleanup(); return; } if (nextSnapshot.revision <= revision) return;
     const priorLatest = snapshot?.latestId, priorSelected = selectedId, wasReconnecting = reconnecting; snapshot = nextSnapshot; revision = nextSnapshot.revision;
+    window.ResponseViewerNonce = typeof snapshot.nonce === "string" ? snapshot.nonce : undefined;
     const responses = Array.isArray(snapshot.responses) ? snapshot.responses.filter(response => response && typeof response.id === "string") : [];
     pruneCodePreferences(responses);
     if (!selectedId) selectedId = snapshot.latestId || responses.at(-1)?.id || null;

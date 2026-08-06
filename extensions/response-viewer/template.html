@@ -81,6 +81,16 @@
     .tree-view details[open] > summary::before { transform:rotate(90deg); }
     .tree-icon { width:1em; height:1em; flex:0 0 auto; vertical-align:middle; opacity:.7; }
     .table-wrap { overflow:auto; margin:26px 0; border:1px solid var(--border); border-radius:8px; } .diff-view { max-height:27rem; overflow:auto; padding:8px 0; font:12px/1.55 var(--mono); } .diff-line { min-height:1.55em; padding:0 15px; white-space:pre; } .diff-file,.diff-hunk { color:var(--cyan); background:color-mix(in srgb,var(--cyan) 12%,transparent); } .diff-addition { color:var(--green); background:color-mix(in srgb,var(--green) 9%,transparent); } .diff-deletion { color:var(--red); background:color-mix(in srgb,var(--red) 9%,transparent); } .diff-meta,.diff-old,.diff-new { color:var(--dim); } .json-view { padding:13px 16px; overflow:auto; font:12px/1.6 var(--mono); } .json-node { padding-left:1em; } .json-view > .json-node { padding-left:0; } .json-children { border-left:1px solid var(--border); } .json-key { color:var(--purple); } .json-string { color:var(--yellow); } .json-number,.json-boolean { color:var(--cyan); } .json-null { color:var(--dim); } .json-view summary { cursor:pointer; color:var(--green); } .csv-view { margin:0; border:0; border-radius:0; } .csv-view th button { padding:0; color:inherit; border:0; background:transparent; cursor:pointer; font:inherit; text-align:left; }
+    .context-block { margin: 0.75rem 0; }
+    .tool-step { border-left: 2px solid var(--rule, #8884); padding: 0.25rem 0 0.25rem 0.6rem; font-size: 0.9em; }
+    .tool-step-row { display: flex; gap: 0.5rem; align-items: baseline; }
+    .tool-step-name { font-family: ui-monospace, monospace; font-weight: 600; }
+    .tool-step-summary { opacity: 0.7; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .tool-step-error .tool-step-glyph { color: #d33; }
+    .tool-step-result > pre, .thinking-view > pre { white-space: pre-wrap; max-height: 22rem; overflow: auto; }
+    .thinking-view { opacity: 0.75; font-size: 0.9em; margin: 0.5rem 0; }
+    /* Successive tool steps otherwise stack a rule between every chip. */
+    .context-block + hr, hr + .context-block { display: none; }
     table { width:100%; min-width:660px; border-collapse:collapse; font-size:13px; }
     th,td { padding:11px 14px; border-bottom:1px solid var(--border); text-align:left; vertical-align:top; }
     th { color:var(--muted); background:var(--surface); font-size:11px; letter-spacing:.06em; text-transform:uppercase; }
@@ -155,6 +165,8 @@
   <script src="diff-view.js"></script>
   <script src="json-view.js"></script>
   <script src="csv-view.js"></script>
+  <script src="tool-step-view.js"></script>
+  <script src="thinking-view.js"></script>
   <script src="navigator.js"></script>
   <script src="export-view.js"></script>
   <script src="client.js"></script>

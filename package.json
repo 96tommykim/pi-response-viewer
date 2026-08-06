@@ -35,6 +35,8 @@
     "extensions/response-viewer/diff-view.js",
     "extensions/response-viewer/json-view.js",
     "extensions/response-viewer/csv-view.js",
+    "extensions/response-viewer/tool-step-view.js",
+    "extensions/response-viewer/thinking-view.js",
     "extensions/response-viewer/navigator.js",
     "extensions/response-viewer/export-view.js",
     "extensions/response-viewer/template.html",
