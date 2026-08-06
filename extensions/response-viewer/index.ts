@@ -105,6 +105,15 @@ export function createResponseViewer(pi: ExtensionAPI, supplied: Partial<ViewerD
 		if (!enabled || !viewerEnabled(ctx)) return;
 		if (server) openOnce(browser, server.url, dependencies.launchViewer);
 	});
+	/** The only signal that separates a turn's assistant messages from one message's stream deltas. */
+	pi.on("message_start", (event) => {
+		if (!enabled) return;
+		const role = (event.message as { role?: unknown } | undefined)?.role;
+		if (role === "assistant") { state.beginMessage(); return; }
+		// Steering and queued follow-up prompts are injected into the running agent loop without a
+		// new before_agent_start, so a user message is the only boundary between their responses.
+		if (role === "user" && state.splitTurn(SAFE_FAILURE_MESSAGE)) publish(true);
+	});
 	pi.on("message_update", (event) => {
 		if (!enabled) return;
 		const text = assistantText(event.message);

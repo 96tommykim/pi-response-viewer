@@ -5,6 +5,7 @@ A local, output-only browser reader for [Pi](https://github.com/earendil-works/p
 ## Features
 
 - Per-turn response history, limited to 30 responses and 2 MiB in memory
+- Complete turns: every assistant message is kept, so text written before each tool call stays visible, separated by a rule
 - Streaming Markdown with sanitized HTML, safe links, tables, lists, and headings
 - Local Prism highlighting for supported fenced languages
 - Mermaid diagrams and collapsible file trees for `mermaid` / `tree` fences
