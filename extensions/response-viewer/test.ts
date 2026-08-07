@@ -316,20 +316,43 @@ assert.equal(capped.truncated, true); assert.equal(capped.markdown.includes("�
 capState.beginTurn(); capState.stream("retained latest"); capState.settle();
 assert.deepEqual(capState.snapshot().responses.map(response => response.markdown), ["retained latest"], "byte bounds drop old responses before the newest");
 
-// Fix round 1, finding 3: the byte truncator in bound() is fence-unaware, so a cut landing inside a
-// pi-tool payload destroys the closing delimiter without touching its "nonce" field. The dangling,
-// unparsable JSON — nonce included — would otherwise render raw and survive every export. The cut
-// is sized to land inside the JSON line, not at the fence's start or end.
-const cutNonce = "cut-nonce-9f2d";
-const cutFence = toolStepSegment(cutNonce, { id: "call-cut", name: "Bash", summary: "y".repeat(200), status: "ok", result: "z".repeat(200), truncated: false });
-const cutMarkdown = "x".repeat(MAX_RESPONSE_BYTES - 300) + "\n\n" + cutFence;
-const cutState = new ViewerState();
-cutState.restore([{ id: "cut", markdown: cutMarkdown, prompt: null, status: "complete", error: null, truncated: false }]);
-const cutResponse = cutState.snapshot().responses[0];
-assert.equal(Buffer.byteLength(cutResponse.markdown, "utf8") <= MAX_RESPONSE_BYTES, true, "the fence-dropping truncation still respects the byte cap");
-assert.doesNotMatch(cutResponse.markdown, /"nonce"/, "a byte cut landing inside a pi-tool fence must drop the partial fence rather than leak its raw JSON payload, nonce included");
-assert.doesNotMatch(cutResponse.markdown, /```pi-tool/, "no dangling pi-tool fence opener should survive a mid-fence byte cut");
-assert.equal(cutResponse.truncated, true);
+// Fix round 3: the byte truncator in bound() is fence-unaware, so a cut can land at any of several
+// distinct positions relative to a pi-tool fence's three-line shape (opener, single-line JSON
+// payload carrying the nonce, closer). dropPartialFence must drop the fence for every position that
+// leaves it unterminated, and must leave a fence the cut happened to complete untouched. Each case's
+// cut offset is computed from the real fence text, not chosen by trial and error, and driven through
+// the real ViewerState/restore()/bound() path exactly like the live truncation path is.
+const cutFenceNonce = "cut-nonce-9f2d";
+const cutFenceText = toolStepSegment(cutFenceNonce, { id: "call-cut", name: "Bash", summary: "y".repeat(200), status: "ok", result: "z".repeat(200), truncated: false });
+const [cutOpener, cutJson] = cutFenceText.split("\n");
+const partialCases: Array<[string, number]> = [
+	["inside the info string", cutOpener.length - 2],
+	["exactly on the newline after the opener", cutOpener.length + 1],
+	["inside the JSON payload line", cutOpener.length + 1 + Math.floor(cutJson.length / 2)],
+	["exactly on the newline after the payload", cutOpener.length + 1 + cutJson.length + 1],
+	["closer partly written (2 backticks)", cutOpener.length + 1 + cutJson.length + 1 + 2],
+];
+for (const [name, offset] of partialCases) {
+	const prose = "x".repeat(MAX_RESPONSE_BYTES - 2 - offset);
+	const markdown = `${prose}\n\n${cutFenceText}${"z".repeat(1000)}`;
+	const state = new ViewerState();
+	state.restore([{ id: "cut", markdown, prompt: null, status: "complete", error: null, truncated: false }]);
+	const bounded = state.snapshot().responses[0];
+	assert.equal(Buffer.byteLength(bounded.markdown, "utf8") <= MAX_RESPONSE_BYTES, true, `${name}: the fence-dropping truncation still respects the byte cap`);
+	assert.doesNotMatch(bounded.markdown, /"nonce"/, `${name}: a cut here must drop the partial fence rather than leak its raw JSON payload, nonce included`);
+	assert.equal(bounded.markdown, prose, `${name}: the prose before the dropped fence must be retained in full, with the partial fence fully removed`);
+	assert.equal(bounded.truncated, true, `${name}: a truncated response stays flagged truncated`);
+}
+// The regression the fix could plausibly cause: a fence that finished writing before the cut must
+// survive byte-for-byte, not be mistaken for one of the dangling cases above.
+const completeOffset = cutFenceText.length;
+const completeProse = "x".repeat(MAX_RESPONSE_BYTES - 2 - completeOffset);
+const completeMarkdown = `${completeProse}\n\n${cutFenceText}${"z".repeat(1000)}`;
+const completeState = new ViewerState();
+completeState.restore([{ id: "cut-complete", markdown: completeMarkdown, prompt: null, status: "complete", error: null, truncated: false }]);
+const completeBounded = completeState.snapshot().responses[0];
+assert.equal(completeBounded.markdown, `${completeProse}\n\n${cutFenceText}`, "closer complete (3 backticks): an already-complete trailing fence must survive a cut landing exactly at its end, byte-for-byte");
+assert.equal(completeBounded.truncated, true);
 const failedState = new ViewerState(); failedState.beginTurn(); failedState.stream("partial"); failedState.fail(); failedState.settle("generic failure");
 assert.deepEqual(failedState.snapshot().responses.at(-1), { id: "live-1", markdown: "partial", prompt: null, status: "error", error: "generic failure", truncated: false });
 const retryState = new ViewerState(); retryState.beginTurn(); retryState.stream("intermediate"); retryState.fail(); retryState.stream("retry-final"); retryState.settle("generic failure");

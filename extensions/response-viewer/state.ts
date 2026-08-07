@@ -50,9 +50,29 @@ const truncateUtf8 = (value: string, limit: number): string => {
 	return value.slice(0, end);
 };
 
-const VIEWER_FENCE = /\n?```(?:pi-tool|pi-think)\n[^\n]*$/;
-/** Remove a viewer fence the byte cap cut in half, whose payload would otherwise render raw. */
-const dropPartialFence = (value: string): string => value.replace(VIEWER_FENCE, "");
+const VIEWER_OPENERS = ["```pi-tool", "```pi-think"] as const;
+/** A cut inside the opener itself leaves no payload, but would still open a fence in the reader. */
+const isPartialOpener = (line: string): boolean =>
+	line.startsWith("`") && VIEWER_OPENERS.some(opener => opener.startsWith(line) && line.length < opener.length);
+/**
+ * Remove a viewer fence the byte cap cut in half. Its payload carries the nonce, and an unterminated
+ * fence keeps it out of every renderer that expects the three-line shape — so it would survive raw
+ * into the page and into every export. The last-3-lines scan runs first, and the single-line opener
+ * check only as a fallback: a lone trailing backtick or two is *also* a valid prefix of both openers,
+ * so checking the opener shape first would misclassify a partially-written closer (whose payload line
+ * sits right above it) as a partially-written opener, dropping only that stray backtick and leaving
+ * the payload's nonce intact.
+ */
+const dropPartialFence = (value: string): string => {
+	const lines = value.split("\n");
+	for (let index = lines.length - 1; index >= 0 && index >= lines.length - 3; index -= 1) {
+		if (!VIEWER_OPENERS.includes(lines[index] as typeof VIEWER_OPENERS[number])) continue;
+		const complete = index === lines.length - 3 && lines[lines.length - 1] === "```";
+		return complete ? value : lines.slice(0, index).join("\n").replace(/\s+$/, "");
+	}
+	if (isPartialOpener(lines[lines.length - 1])) return lines.slice(0, -1).join("\n").replace(/\s+$/, "");
+	return value;
+};
 
 /**
  * A turn holds every message of one prompt, so it can outgrow the byte cap on its own. Drop whole
