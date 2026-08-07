@@ -45,21 +45,35 @@
       const budgetLeft = isContextFence ? toolFenceCount < MAX_TOOL_FENCES : specialFenceCount < MAX_SPECIAL_FENCES;
       const special = budgetLeft && language && window.ResponseViewerFences.render(language[0], { source: plain, pre });
       if (special && isContextFence) toolFenceCount += 1; else if (special) specialFenceCount += 1;
-      if (!special) {
+      // A viewer fence the renderer declined — over the fence budget, or over a renderer's size gate —
+      // must not fall through to the ordinary code-block branch: its payload carries the session nonce,
+      // which would then be shown as page text and wired to the Copy button. A fence that does not carry
+      // the nonce is assistant text impersonating a step, and still renders as an ordinary code block.
+      const sessionNonce = typeof window.ResponseViewerNonce === "string" ? window.ResponseViewerNonce : "";
+      const hidden = Boolean(isContextFence && !special && sessionNonce && plain.includes(sessionNonce));
+      if (!special && !hidden) {
         const wrapButton = action("code-action code-wrap-toggle", "Wrap", "Wrap code lines"); const wrapped = Boolean(preference?.wrapped); pre.classList.toggle("code-wrapped", wrapped); wrapButton.setAttribute("aria-pressed", String(wrapped)); wrapButton.addEventListener("click", () => { const next = pre.classList.toggle("code-wrapped"); wrapButton.setAttribute("aria-pressed", String(next)); rememberCodePreference(responseId, index, { wrapped: next }); });
         const lines = plain ? plain.split(/\r?\n/).length : 1; if (lines > 24) { const expanded = Boolean(preference?.expanded); pre.classList.toggle("code-expanded", expanded); pre.classList.toggle("code-collapsed", !expanded); const expandButton = action("code-action code-expand-toggle", expanded ? "Collapse" : "Expand", expanded ? "Collapse code block" : "Expand code block"); expandButton.setAttribute("aria-expanded", String(expanded)); expandButton.addEventListener("click", () => { const next = pre.classList.toggle("code-expanded"); pre.classList.toggle("code-collapsed", !next); expandButton.textContent = next ? "Collapse" : "Expand"; expandButton.setAttribute("aria-expanded", String(next)); expandButton.setAttribute("aria-label", next ? "Collapse code block" : "Expand code block"); rememberCodePreference(responseId, index, { expanded: next }); }); }
       }
-      if (code) code.replaceChildren(window.ResponseViewerSyntax.highlight(plain, language));
+      if (code && !hidden) code.replaceChildren(window.ResponseViewerSyntax.highlight(plain, language));
       label.append(name, actions); pre.replaceWith(wrapper);
-      if (special && special.bare) { wrapper.className = "context-block"; wrapper.append(...special.nodes); }
+      if (hidden) { wrapper.className = "context-block"; const note = document.createElement("div"); note.className = "context-hidden"; note.textContent = language[0] === "pi-tool" ? "Tool step hidden (viewer limit reached)" : "Thinking hidden (viewer limit reached)"; wrapper.append(note); }
+      else if (special && special.bare) { wrapper.className = "context-block"; wrapper.append(...special.nodes); }
       else if (special) wrapper.append(label, ...special.nodes);
       else wrapper.append(label, pre);
     });
     body.querySelectorAll("table").forEach(table => { if (table.closest(".csv-view")) return; const wrap = document.createElement("div"); wrap.className = "table-wrap"; table.replaceWith(wrap); wrap.append(table); });
   };
   const selected = () => snapshot?.responses?.find(response => response?.id === selectedId);
-  const concise = value => { const line = String(value || "").split(/\r?\n/).find(text => text.trim() && !/^\s*```/.test(text)) || ""; return line.replace(/<[^>]*>/g, "").replace(/!?(\[[^\]]*\])\([^)]*\)/g, "$1").replace(/^[\s>#*`~\-\d.)]+/, "").replace(/[\*_`~]/g, "").trim().replace(/\s+/g, " ").slice(0, 80) || "Response viewer"; };
-  const responseLabel = response => headings[0]?.textContent?.replace(/#$/, "").trim() || concise(response?.markdown);
+  // A viewer fence is exactly three lines — opener, single-line JSON payload, closer — and that
+  // payload's first key is the session nonce. Skipping only the delimiter lines would return the
+  // payload itself as the preview, printing the nonce as visible page text.
+  const VIEWER_OPENER = /^\s*```(?:pi-tool|pi-think)\s*$/;
+  const firstProse = value => { const lines = String(value || "").split(/\r?\n/); for (let index = 0; index < lines.length; index += 1) { if (VIEWER_OPENER.test(lines[index])) { index += 1; continue; } if (lines[index].trim() && !/^\s*```/.test(lines[index])) return lines[index]; } return ""; };
+  const concise = value => firstProse(value).replace(/<[^>]*>/g, "").replace(/!?(\[[^\]]*\])\([^)]*\)/g, "$1").replace(/^[\s>#*`~\-\d.)]+/, "").replace(/[\*_`~]/g, "").trim().replace(/\s+/g, " ").slice(0, 80) || "Response viewer";
+  // The prompt comes first, as in the navigator's own label: it names the turn, and for a turn that
+  // opens with thinking or a tool call the body has nothing quotable to fall back to.
+  const responseLabel = response => response?.prompt?.text ? concise(response.prompt.text) : headings[0]?.textContent?.replace(/#$/, "").trim() || concise(response?.markdown);
   const titlePrefix = response => reconnecting ? "Reconnecting" : response?.status === "error" ? "Response error" : response?.id !== snapshot?.latestId ? "Previous" : response?.status === "running" ? "Receiving" : "Response";
   const updateChrome = () => {
     const responses = Array.isArray(snapshot?.responses) ? snapshot.responses : [], response = selected(), index = responses.findIndex(item => item.id === selectedId), older = response && response.id !== snapshot?.latestId;

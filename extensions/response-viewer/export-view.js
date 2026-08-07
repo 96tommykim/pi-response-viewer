@@ -9,19 +9,28 @@
   // syntax, and a newline in it would let the following line become a real heading. Flatten it.
   const inlineText = text => String(text == null ? "" : text).replace(/\s+/g, " ").trim();
   const cutNote = flag => flag === true ? "\n\n    … truncated, see terminal" : "";
+  // Response-level truncation — whole earlier messages of the turn dropped by the byte budget — is
+  // shown only in the reader's chrome bar, which is outside the exported Markdown and outside the
+  // #response-body clone that Print current prints. Without this note a cut turn reads as complete.
+  const DROP_NOTE = "… earlier messages in this turn were dropped, see terminal";
+  const dropNote = flag => flag === true ? `\n\n    ${DROP_NOTE}` : "";
   const plainMarkdown = response => {
+    // Fail closed: read the nonce into a local and require a non-empty string. Comparing against the
+    // global directly would make a payload that omits `nonce` compare equal whenever it is unset.
+    const nonce = window.ResponseViewerNonce;
     const header = response.prompt && response.prompt.text ? `**Prompt**\n\n${literalBlock(response.prompt.text)}${cutNote(response.prompt.truncated)}\n\n` : "";
     const body = response.markdown.replace(/```(pi-tool|pi-think)\n(.*)\n```/g, (whole, kind, json) => {
+      if (typeof nonce !== "string" || !nonce) return whole;
       try {
         const payload = JSON.parse(json);
-        if (payload.nonce !== window.ResponseViewerNonce) return whole;
+        if (payload.nonce !== nonce) return whole;
         if (kind === "pi-think") return `**Thinking**\n\n${literalBlock(payload.thinking)}${cutNote(payload.truncated)}`;
         const status = payload.status === "ok" ? "✓" : payload.status === "error" ? "✗" : "⏳";
         const result = payload.result ? `\n\n${literalBlock(payload.result)}${cutNote(payload.truncated)}` : "";
         return `**${status} ${inlineText(payload.name)}**\n\n${literalBlock(payload.summary)}${result}`;
       } catch { return whole; }
     });
-    return `${header}${body}`;
+    return `${header}${body}${dropNote(response.truncated)}`;
   };
   const create = ({ getSnapshot, getSelected, getCurrentBody, copy, render }) => {
     let printTimer = 0;
@@ -40,7 +49,10 @@
       });
       else {
         const current = getCurrentBody()?.cloneNode(true); if (!current) return;
-        current.removeAttribute("id"); current.classList.add("print-response", "article-body"); surface.append(current);
+        current.removeAttribute("id"); current.classList.add("print-response", "article-body");
+        // The clone is #response-body; the "· Response truncated" marker lives in #response-meta.
+        if (responses[0]?.truncated === true) { const note = document.createElement("p"); note.className = "print-drop-note"; note.textContent = DROP_NOTE; current.append(note); }
+        surface.append(current);
       }
       surface.removeAttribute("aria-hidden");
       document.body.dataset.printScope = all ? "all" : "current";

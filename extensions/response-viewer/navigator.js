@@ -1,6 +1,11 @@
 /* Local searchable retained-response navigator. It receives only ViewerSnapshot responses. */
 (() => {
-  const concise = value => (String(value || "").split(/\r?\n/).find(line => line.trim() && !/^\s*```/.test(line)) || "Response viewer").replace(/<[^>]*>/g, "").replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/^[\s>#*`~\-\d.)]+/, "").replace(/[\*_`~]/g, "").trim().replace(/\s+/g, " ").slice(0, 96) || "Response viewer";
+  // A viewer fence is exactly three lines — opener, single-line JSON payload, closer — and that
+  // payload's first key is the session nonce. Skipping only the delimiter lines would return the
+  // payload itself as the preview, printing the nonce as visible page text.
+  const VIEWER_OPENER = /^\s*```(?:pi-tool|pi-think)\s*$/;
+  const firstProse = value => { const lines = String(value || "").split(/\r?\n/); for (let index = 0; index < lines.length; index += 1) { if (VIEWER_OPENER.test(lines[index])) { index += 1; continue; } if (lines[index].trim() && !/^\s*```/.test(lines[index])) return lines[index]; } return ""; };
+  const concise = value => (firstProse(value) || "Response viewer").replace(/<[^>]*>/g, "").replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/^[\s>#*`~\-\d.)]+/, "").replace(/[\*_`~]/g, "").trim().replace(/\s+/g, " ").slice(0, 96) || "Response viewer";
   const summary = response => {
     const markdown = String(response.markdown || ""), heading = /^\s{0,3}#{1,6}\s+(.+)$/m.exec(markdown)?.[1];
     return { id: response.id, title: concise(response.prompt?.text || heading || markdown), snippet: concise(markdown), markdown, folded: undefined, status: response.status, truncated: response.truncated };

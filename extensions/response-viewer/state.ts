@@ -384,11 +384,17 @@ export class ViewerState {
 		this.publishActive();
 	}
 
-	/** Record the prompt that opened this turn. Shown as the response header, not part of the body. */
+	/**
+	 * Record the prompt that opened this turn. Shown as the response header, not part of the body.
+	 * `capText` and the gate on the *capped* text both mirror `responseHistory`: gating on the raw text
+	 * instead would publish a whitespace-only prompt — for a prompt opening with more than PROMPT_BYTES
+	 * of whitespace — where a reload rebuilds no prompt at all.
+	 */
 	setPrompt(text: string): void {
-		if (!this.active || !text.trim()) return;
-		const capped = truncateUtf8(text, PROMPT_BYTES);
-		this.active.prompt = { text: capped, truncated: capped.length < text.length };
+		if (!this.active) return;
+		const { text: capped, truncated } = capText(text, PROMPT_BYTES);
+		if (!capped.trim()) return;
+		this.active.prompt = { text: capped, truncated };
 	}
 
 	/**
@@ -494,8 +500,18 @@ export class ViewerState {
 
 	close(): void { this.closed = true; this.active = undefined; this.changed(); }
 
+	/**
+	 * `commitMessage` clears `current` and pushes its segments into `done`, so once a message has been
+	 * committed the newest message is the last segment of `done`, not `current`. Protecting `current`
+	 * then would hand every real segment to `fitSegments`' drop loop and publish an empty response for
+	 * a single oversized message — which prefix truncation in `bound()` is what actually handles.
+	 * `done` is still passed by reference: `fitSegments` drops segments by mutating it, and
+	 * `findToolStep`'s guarantee that a dropped step can no longer be completed depends on that.
+	 */
 	private fit(active: { done: string[]; current: string; dropped: boolean }): string {
-		const { markdown, truncated } = fitSegments(active.done, active.current);
+		const committed = active.current === "" ? active.done.pop() : undefined;
+		const { markdown, truncated } = fitSegments(active.done, committed ?? active.current);
+		if (committed !== undefined) active.done.push(committed);
 		if (truncated) active.dropped = true; // Sticky: later messages fit again, text is still gone.
 		return markdown;
 	}

@@ -176,6 +176,7 @@ window.print = () => { window.__printCalls++; };
     const shortHeader = body.querySelector(".response-prompt");
     ok(shortHeader?.classList.contains("response-prompt-open") && !shortHeader.querySelector(".response-prompt-toggle"), "a short prompt should render open with no toggle");
     ok(!shortHeader.querySelector(".response-prompt-cut"), "a non-truncated prompt rendered a truncation marker");
+    ok(document.title.includes(shortPrompt), "the browser tab title did not name the turn by its prompt");
     const longPrompt = "line one\\nline two\\nline three\\nline four\\nline five";
     window.__events.emit({ status: "complete", responses: [response("prompt-long", "long answer", "complete", { text: longPrompt, truncated: false })], latestId: "prompt-long", revision: 13 });
     ok(await pollUntil(() => body.querySelector(".response-prompt-toggle")), "a long prompt did not render a truncation toggle");
@@ -280,6 +281,64 @@ window.print = () => { window.__printCalls++; };
     ok(await pollUntil(() => window.__downloads.length > downloadsBeforeCurrent), "download-response did not produce a download for the fence-bearing current response");
     const currentDownloadText = await window.__downloads[downloadsBeforeCurrent].blob.text();
     ok(!currentDownloadText.includes(currentNonceValue) && !currentDownloadText.includes("pi-tool") && currentDownloadText.includes("Grep") && currentDownloadText.includes("TODO"), "download-response leaked a nonce or a raw pi-tool fence, or dropped the flattened tool step");
+    // Final review, finding 1: concise() skipped only the fence DELIMITER lines, so for a turn that
+    // opens with thinking or a tool call the next non-blank line is the fence payload — whose first key
+    // is the session nonce. That string became the browser tab title and the navigator preview.
+    const titleNonceValue = "title-" + Math.random().toString(36).slice(2);
+    const titleMarkdown = [exportFence("pi-think", { nonce: titleNonceValue, thinking: "read state.ts first", truncated: false }), "", exportFence("pi-tool", { nonce: titleNonceValue, id: "call-title", name: "Read", summary: "state.ts", status: "ok", result: "file body", truncated: false })].join("\\n");
+    window.__events.emit({ status: "complete", responses: [response("title-leak", titleMarkdown)], latestId: "title-leak", revision: 22, nonce: titleNonceValue });
+    ok(await pollUntil(() => window.ResponseViewerNonce === titleNonceValue && body.querySelector(".thinking-view")), "test setup: the nonce-leak fixture did not render its viewer fences");
+    ok(!document.title.includes(titleNonceValue), "the session nonce leaked into document.title");
+    ok(panel.open, "test setup: the navigator must be open for its labels to be in the DOM");
+    const navigatorLabels = [...document.querySelectorAll(".navigator-title, .navigator-detail")];
+    ok(navigatorLabels.length > 0, "test setup: the navigator rendered no labels");
+    ok(!navigatorLabels.some(node => node.textContent.includes(titleNonceValue)), "the session nonce leaked into a navigator label");
+    // Final review, finding 2: past MAX_TOOL_FENCES (256 in client.js) the renderer declines, and the
+    // fence fell through to the ordinary code-block branch — printing the raw payload, nonce first,
+    // with a working Copy button. An over-budget viewer fence must degrade to a neutral placeholder.
+    const overflowNonceValue = "overflow-" + Math.random().toString(36).slice(2);
+    const overflowFences = Array.from({ length: 257 }, (_, index) => exportFence("pi-tool", { nonce: overflowNonceValue, id: "of-" + index, name: "Read", summary: "f" + index + ".ts", status: "ok", result: "", truncated: false }));
+    overflowFences.push(exportFence("pi-think", { nonce: overflowNonceValue, thinking: "over the budget", truncated: false }));
+    window.__events.emit({ status: "complete", responses: [response("overflow", overflowFences.join("\\n\\n"))], latestId: "overflow", revision: 23, nonce: overflowNonceValue });
+    ok(await pollUntil(() => body.querySelectorAll(".tool-step").length === 256), "the tool-fence budget did not render exactly MAX_TOOL_FENCES chips");
+    const hiddenNotes = [...body.querySelectorAll(".context-hidden")];
+    ok(hiddenNotes.length === 2, "the two over-budget viewer fences did not render placeholders");
+    ok(hiddenNotes[0].textContent === "Tool step hidden (viewer limit reached)" && hiddenNotes[1].textContent === "Thinking hidden (viewer limit reached)", "the over-budget placeholders did not carry the neutral per-kind text");
+    ok(!body.textContent.includes(overflowNonceValue), "an over-budget viewer fence printed its raw payload, nonce included");
+    ok(hiddenNotes.every(note => note.parentElement.classList.contains("context-block") && !note.parentElement.querySelector("button")), "an over-budget viewer fence kept its code-block chrome or its Copy button");
+    ok(!body.querySelector(".thinking-view"), "the over-budget thinking fence rendered a disclosure instead of a placeholder");
+    // Final review, finding 4: response-level truncation (whole earlier messages of the turn dropped by
+    // the byte budget) is shown only in #response-meta, which is outside exported markdown and outside
+    // the #response-body clone Print current prints, so a cut turn read as complete in both.
+    const dropNoteText = "\\u2026 earlier messages in this turn were dropped, see terminal";
+    window.__events.emit({ status: "complete", responses: [{ id: "response-truncated", markdown: "kept tail of the turn", status: "complete", error: null, truncated: true, prompt: null }], latestId: "response-truncated", revision: 24 });
+    ok(await pollUntil(() => body.textContent.includes("kept tail of the turn")), "the response-level truncated fixture did not render");
+    const dropDownloadsBefore = window.__downloads.length;
+    document.getElementById("download-response").click();
+    ok(await pollUntil(() => window.__downloads.length > dropDownloadsBefore), "download-response did not produce a download for the truncated response");
+    ok((await window.__downloads[dropDownloadsBefore].blob.text()).includes(dropNoteText), "a response-level truncated export did not carry the dropped-messages note");
+    document.getElementById("print-response").click();
+    ok(surface.textContent.includes(dropNoteText), "Print current did not carry the dropped-messages note for a truncated response");
+    dispatchEvent(new Event("afterprint"));
+    window.__events.emit({ status: "complete", responses: [response("response-whole", "the whole turn body")], latestId: "response-whole", revision: 25 });
+    ok(await pollUntil(() => body.textContent.includes("the whole turn body")), "the untruncated fixture did not render");
+    const wholeDownloadsBefore = window.__downloads.length;
+    document.getElementById("download-response").click();
+    ok(await pollUntil(() => window.__downloads.length > wholeDownloadsBefore), "download-response did not produce a download for the untruncated response");
+    ok(!(await window.__downloads[wholeDownloadsBefore].blob.text()).includes(dropNoteText), "an untruncated export carried a dropped-messages note");
+    document.getElementById("print-response").click();
+    ok(!surface.textContent.includes(dropNoteText), "Print current carried a dropped-messages note for an untruncated response");
+    dispatchEvent(new Event("afterprint"));
+    // Final review, finding 5: the export-side nonce check must fail closed. Comparing against the
+    // global directly means an unset nonce makes a payload that OMITS the nonce key compare equal, flattening
+    // a forged fence into a trustworthy-looking tool step. It must be left exactly as written.
+    const noNonceExportFence = exportFence("pi-tool", { id: "call-no-nonce", name: "Write", summary: "z.ts", status: "ok", result: "forged", truncated: false });
+    window.__events.emit({ status: "complete", responses: [response("export-no-nonce", noNonceExportFence)], latestId: "export-no-nonce", revision: 26 });
+    ok(await pollUntil(() => window.ResponseViewerNonce === undefined), "test setup: the session nonce must be unset for the fail-closed export check");
+    const noNonceDownloadsBefore = window.__downloads.length;
+    document.getElementById("download-response").click();
+    ok(await pollUntil(() => window.__downloads.length > noNonceDownloadsBefore), "download-response did not produce a download for the no-nonce fence");
+    ok((await window.__downloads[noNonceDownloadsBefore].blob.text()) === noNonceExportFence, "a payload omitting nonce was not left byte-identical in the export");
     document.title = "PASS: response viewer browser smoke";
   } catch (error) { document.title = "FAIL: " + (error instanceof Error ? error.message : String(error)); }
 })();

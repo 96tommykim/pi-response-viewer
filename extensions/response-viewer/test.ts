@@ -101,19 +101,38 @@ const equivEntries = [
 	{ role: "toolResult", toolCallId: "eq-1", content: [{ type: "text", text: "file body" }], isError: false },
 	{ role: "assistant", content: [{ type: "text", text: "assistant-final" }] },
 ];
+const equivPrompt = "why is the branch slow?";
 const liveEquivState = new ViewerState();
 liveEquivState.beginTurn();
+liveEquivState.setPrompt(equivPrompt);
 for (const message of equivEntries) {
 	if (message.role === "toolResult") liveEquivState.completeStep(message.toolCallId as string, messageText(message), message.isError === true);
 	else liveEquivState.commitMessage(message);
 }
 liveEquivState.settle();
-const liveEquivMarkdown = liveEquivState.snapshot().responses.at(-1)!.markdown;
+const liveEquivResponse = liveEquivState.snapshot().responses.at(-1)!;
+const liveEquivMarkdown = liveEquivResponse.markdown;
 const restoredEquiv = responseHistory([
-	{ type: "message", id: "equiv-user", message: { role: "user", content: [] } },
+	{ type: "message", id: "equiv-user", message: { role: "user", content: [{ type: "text", text: equivPrompt }] } },
 	...equivEntries.map(message => ({ type: "message", message })),
 ], liveEquivState.nonce);
 assert.equal(restoredEquiv[0].markdown, liveEquivMarkdown, "restored and live paths converge on the same markdown for the same message sequence");
+// The prompt is response metadata rather than body, so markdown equality alone never covers it, and
+// setPrompt and responseHistory cap it through separate code paths.
+assert.deepEqual(restoredEquiv[0].prompt, liveEquivResponse.prompt, "restored and live paths converge on the same prompt, not only the same markdown");
+
+// A prompt that opens with more than PROMPT_BYTES of whitespace caps to whitespace only. Restore
+// gates on the capped text and keeps no prompt; live gating on the RAW text published a
+// whitespace-only prompt header instead — the same input, two different readers.
+const whitespacePrompt = `${" ".repeat(PROMPT_BYTES + 10)}the real question`;
+const whitespaceLive = new ViewerState();
+whitespaceLive.beginTurn(); whitespaceLive.setPrompt(whitespacePrompt); whitespaceLive.stream("answer"); whitespaceLive.settle();
+const whitespaceRestored = responseHistory([
+	{ type: "message", id: "whitespace-user", message: { role: "user", content: [{ type: "text", text: whitespacePrompt }] } },
+	{ type: "message", message: textMessage("answer") },
+], whitespaceLive.nonce);
+assert.deepEqual(whitespaceLive.snapshot().responses.at(-1)!.prompt, whitespaceRestored[0].prompt, "live and restore agree on a prompt whose capped text is whitespace only");
+assert.equal(whitespaceLive.snapshot().responses.at(-1)!.prompt, null, "a prompt that caps to whitespace only is no prompt at all");
 
 // --- turn context: pure conversion ---
 const NONCE = "test-nonce";
@@ -216,7 +235,9 @@ assert.equal(retryDiscardState.snapshot().responses.at(-1)?.markdown, "retried",
 
 assert.equal(MAX_RESPONSE_BYTES, 4 * 1024 * 1024, "the byte budget accounts for tool results");
 
-// settle() now always rebuilds the markdown; it must still respect the byte cap.
+// settle() rebuilds the markdown only when it changed something — `if (stepsClosed || closed !==
+// active.current)` — a step it closed, or a fence the last message left open. When it does rebuild,
+// it must still respect the byte cap.
 const budgetState = new ViewerState();
 budgetState.beginTurn();
 budgetState.stream("first");
@@ -242,6 +263,31 @@ assert.doesNotThrow(() => survivalState.settle(), "settle must not throw scannin
 const survived = survivalState.snapshot().responses.at(-1)!;
 assert.equal(Buffer.byteLength(survived.markdown, "utf8") <= MAX_RESPONSE_BYTES, true, "the response stays within budget");
 assert.match(survived.markdown, /^x+$/, "the newest oversized message remains visible and coherent");
+
+// A single assistant message larger than the whole byte budget. `commitMessage` clears `current` and
+// pushes every segment into `done`, so protecting `current` here would hand the only real segment to
+// fitSegments' drop loop and publish an empty response — while a reload of the same branch showed the
+// message. The live path must keep the message (prefix-truncated by bound(), flagged truncated) and
+// must agree with what restore rebuilds. The byte-budget test above drives only stream()/beginMessage(),
+// never commitMessage, which is why this shape went uncovered.
+const oversizedMessage = { role: "assistant", content: [{ type: "text", text: "y".repeat(MAX_RESPONSE_BYTES + 1000) }] };
+const oversizedLive = new ViewerState();
+oversizedLive.beginTurn();
+oversizedLive.commitMessage(oversizedMessage);
+oversizedLive.settle();
+const oversizedResponse = oversizedLive.snapshot().responses.at(-1)!;
+assert.notEqual(oversizedResponse.markdown, "", "a single oversized committed message must not render as an empty response");
+assert.equal(/^y+$/.test(oversizedResponse.markdown), true, "the oversized message survives as its own prefix, not as separator debris");
+assert.equal(Buffer.byteLength(oversizedResponse.markdown, "utf8") <= MAX_RESPONSE_BYTES, true, "the surviving prefix still respects the byte cap");
+assert.equal(oversizedResponse.truncated, true, "an oversized single message is flagged truncated");
+const oversizedRestoredState = new ViewerState();
+oversizedRestoredState.restore(responseHistory([
+	{ type: "message", id: "oversized-user", message: { role: "user", content: [] } },
+	{ type: "message", message: oversizedMessage },
+], oversizedLive.nonce));
+const oversizedRestored = oversizedRestoredState.snapshot().responses.at(-1)!;
+assert.equal(oversizedRestored.markdown, oversizedResponse.markdown, "live and restore agree on a single oversized message");
+assert.equal(oversizedRestored.truncated, oversizedResponse.truncated, "live and restore agree that an oversized message is truncated");
 
 assert.deepEqual(responseHistory([{ type: "message", id: "assistant-before-user", message: textMessage("orphan") }, { type: "message", id: "no-id", message: { role: "user", content: [] } }, { type: "message", message: textMessage("visible") }], NONCE).map(response => [response.id, response.markdown]), [["restored-1", "orphan"], ["no-id", "visible"]]);
 assert.deepEqual(responseHistory([{ type: "message", message: { role: "user", content: [] } }, { type: "message", message: textMessage("") }], NONCE), []);
