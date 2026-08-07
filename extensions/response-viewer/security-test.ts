@@ -196,6 +196,39 @@ window.print = () => { window.__printCalls++; };
     await wait(80);
     const hostileHeader = body.querySelector(".response-prompt");
     ok(hostileHeader?.querySelector(".response-prompt-text")?.textContent === hostilePrompt && !hostileHeader.querySelector("script") && window.__promptPwned === undefined, "hostile prompt text was not inserted inertly as literal text");
+    // plainMarkdown() (export-view.js): exported/printed Markdown must flatten pi-tool/pi-think
+    // fences whose nonce matches the live session nonce (taken from the published snapshot, not a
+    // literal) into readable, literally-emitted text, while a fence carrying a foreign nonce is left
+    // exactly as written. A tool result containing Markdown-looking text must survive as literal text.
+    const backtick = String.fromCharCode(96);
+    const exportFence = (kind, payload) => backtick + backtick + backtick + kind + "\\n" + JSON.stringify(payload) + "\\n" + backtick + backtick + backtick;
+    const exportNonceValue = "export-" + Math.random().toString(36).slice(2);
+    const exportPrompt = "why is **this** slow?\\n# investigate";
+    const exportResult = "**bold** text\\n# Heading\\n" + backtick + backtick + backtick + "js\\nconst x = 1;\\n" + backtick + backtick + backtick;
+    const exportToolFence = exportFence("pi-tool", { nonce: exportNonceValue, id: "call-export", name: "Read", summary: "a/b.ts", status: "ok", result: exportResult, truncated: false });
+    const exportThinkFence = exportFence("pi-think", { nonce: exportNonceValue, thinking: "internal reasoning about **bold** stuff", truncated: false });
+    const foreignFence = exportFence("pi-tool", { nonce: "totally-different-nonce", id: "call-foreign", name: "Write", summary: "z", status: "ok", result: "unchanged", truncated: false });
+    const exportMatchMarkdown = [exportToolFence, "", exportThinkFence].join("\\n");
+    window.__events.emit({ status: "complete", responses: [response("export-match", exportMatchMarkdown, "complete", { text: exportPrompt, truncated: false }), response("export-foreign", foreignFence)], latestId: "export-match", revision: 18, nonce: exportNonceValue });
+    await wait(120);
+    ok(window.ResponseViewerNonce === exportNonceValue, "test setup: export nonce did not propagate to the client");
+    const downloadsBefore = window.__downloads.length;
+    document.getElementById("download-history").click();
+    await wait(20);
+    const exported = await window.__downloads[downloadsBefore].blob.text();
+    ok(!exported.includes(exportNonceValue), "the session nonce leaked into exported markdown");
+    ok(!exported.includes("pi-think"), "a matched-nonce pi-think fence was not flattened out of exported markdown");
+    ok(exported.split("pi-tool").length - 1 === 1, "exported markdown should flatten the matched-nonce tool step and leave only the foreign-nonce fence's literal pi-tool marker");
+    ok(exported.includes("why is **this** slow?") && exported.includes("# investigate"), "the prompt did not appear in exported markdown");
+    ok(exported.includes("Read") && exported.includes("a/b.ts") && exported.includes("\\u2713 Read"), "the tool step did not become readable text in exported markdown");
+    ok(exported.includes("internal reasoning about **bold** stuff"), "the thinking block did not become readable text in exported markdown");
+    ok(exported.includes("    **bold** text") && exported.includes("    # Heading") && exported.includes("    " + backtick + backtick + backtick + "js"), "a tool result containing Markdown was not emitted as a literal indented block");
+    document.getElementById("print-history").click();
+    await wait(20);
+    const exportArticle = [...surface.querySelectorAll(".print-response")][0];
+    ok(exportArticle?.textContent.includes("**bold** text") && exportArticle.textContent.includes("# Heading") && !exportArticle.querySelector("h1,h2,h3,h4,h5,h6"), "print-all rendered tool-result Markdown as live formatting instead of literal text");
+    ok(exportArticle?.textContent.includes("why is **this** slow?"), "print-all did not include the exported prompt text");
+    dispatchEvent(new Event("afterprint"));
     document.title = "PASS: response viewer browser smoke";
   } catch (error) { document.title = "FAIL: " + (error instanceof Error ? error.message : String(error)); }
 })();
