@@ -289,6 +289,26 @@ const oversizedRestored = oversizedRestoredState.snapshot().responses.at(-1)!;
 assert.equal(oversizedRestored.markdown, oversizedResponse.markdown, "live and restore agree on a single oversized message");
 assert.equal(oversizedRestored.truncated, oversizedResponse.truncated, "live and restore agree that an oversized message is truncated");
 
+// settle()'s rebuild has the same shape as fit(): with every message committed, `closed` is empty and
+// `active.done` holds the whole turn. Both go through fitTurn so the newest committed segment is
+// protected there too. This drives the shape that reaches the rebuild — an oversized message ending
+// in a tool call that never receives a result, which settle() closes as "Interrupted.".
+const oversizedStepLive = new ViewerState();
+oversizedStepLive.beginTurn();
+oversizedStepLive.commitMessage({ role: "assistant", content: [
+	{ type: "text", text: "w".repeat(MAX_RESPONSE_BYTES + 1000) },
+	{ type: "toolCall", id: "call-oversized-step", name: "Bash", arguments: { command: "long job" } },
+] });
+oversizedStepLive.settle();
+const oversizedStepResponse = oversizedStepLive.snapshot().responses.at(-1)!;
+assert.notEqual(oversizedStepResponse.markdown, "", "settle must not blank a turn whose oversized message ends in an abandoned step");
+assert.equal(Buffer.byteLength(oversizedStepResponse.markdown, "utf8") <= MAX_RESPONSE_BYTES, true, "the settled oversized turn still respects the byte cap");
+assert.equal(oversizedStepResponse.truncated, true, "the settled oversized turn stays flagged truncated");
+const oversizedSteps = oversizedStepResponse.markdown.split(SEGMENT_SEPARATOR).map(segment => parseToolStep(segment, oversizedStepLive.nonce)).filter(Boolean);
+assert.equal(oversizedSteps.length, 1, "the abandoned step survives the byte drop as the newest segment");
+assert.equal(oversizedSteps[0]!.status, "error", "the abandoned step is closed rather than left running");
+assert.equal(oversizedSteps[0]!.result, "Interrupted.");
+
 assert.deepEqual(responseHistory([{ type: "message", id: "assistant-before-user", message: textMessage("orphan") }, { type: "message", id: "no-id", message: { role: "user", content: [] } }, { type: "message", message: textMessage("visible") }], NONCE).map(response => [response.id, response.markdown]), [["restored-1", "orphan"], ["no-id", "visible"]]);
 assert.deepEqual(responseHistory([{ type: "message", message: { role: "user", content: [] } }, { type: "message", message: textMessage("") }], NONCE), []);
 assert.equal(viewerEnabled({ mode: "rpc" }), false);

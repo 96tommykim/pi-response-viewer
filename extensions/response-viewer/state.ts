@@ -467,11 +467,13 @@ export class ViewerState {
 		// — the next response in an export — and would not match what a reload rebuilds. Closing an
 		// abandoned step edits an already-published segment too, so either case forces a rebuild;
 		// otherwise the already-published markdown (which fail() may have intentionally kept showing
-		// stale partial text for) is left untouched. Route the rebuild through `fitSegments`, not
-		// `joinSegments`, so it cannot resurrect segments the byte budget already dropped.
+		// stale partial text for) is left untouched. Route the rebuild through `fitTurn`, not
+		// `joinSegments`, so it cannot resurrect segments the byte budget already dropped — and not
+		// through `fitSegments` directly, which with `closed` empty would hand every segment of a
+		// committed turn to the drop loop, exactly as `fit` once did.
 		const closed = closeOpenFence(active.current);
 		if (stepsClosed || closed !== active.current) {
-			const { markdown, truncated } = fitSegments(active.done, closed);
+			const { markdown, truncated } = this.fitTurn(active.done, closed);
 			if (truncated) active.dropped = true;
 			this.responses[index] = { ...this.responses[index], markdown, truncated: active.dropped };
 		}
@@ -501,17 +503,26 @@ export class ViewerState {
 	close(): void { this.closed = true; this.active = undefined; this.changed(); }
 
 	/**
-	 * `commitMessage` clears `current` and pushes its segments into `done`, so once a message has been
-	 * committed the newest message is the last segment of `done`, not `current`. Protecting `current`
-	 * then would hand every real segment to `fitSegments`' drop loop and publish an empty response for
-	 * a single oversized message — which prefix truncation in `bound()` is what actually handles.
-	 * `done` is still passed by reference: `fitSegments` drops segments by mutating it, and
+	 * Fit one turn to the byte budget, honouring `fitSegments`' contract that `newest` is never
+	 * dropped. `newest` is the streaming message while there is one; but `commitMessage` clears
+	 * `current` and pushes its segments into `done`, so once every message has been committed the
+	 * newest message is the last segment of `done`. Protecting the empty `current` then would hand
+	 * every real segment to the drop loop and publish an empty response, where a single oversized
+	 * message should reach the prefix truncation in `bound()` instead. `settle`'s rebuild has the same
+	 * shape and shares this, so it protects the newest segment on its own terms rather than resting on
+	 * the argument that every earlier publish already fitted `done`.
+	 * `done` is passed by reference on purpose: `fitSegments` drops segments by mutating it, and
 	 * `findToolStep`'s guarantee that a dropped step can no longer be completed depends on that.
 	 */
+	private fitTurn(done: string[], current: string): { markdown: string; truncated: boolean } {
+		const committed = current === "" ? done.pop() : undefined;
+		const result = fitSegments(done, committed ?? current);
+		if (committed !== undefined) done.push(committed);
+		return result;
+	}
+
 	private fit(active: { done: string[]; current: string; dropped: boolean }): string {
-		const committed = active.current === "" ? active.done.pop() : undefined;
-		const { markdown, truncated } = fitSegments(active.done, committed ?? active.current);
-		if (committed !== undefined) active.done.push(committed);
+		const { markdown, truncated } = this.fitTurn(active.done, active.current);
 		if (truncated) active.dropped = true; // Sticky: later messages fit again, text is still gone.
 		return markdown;
 	}
