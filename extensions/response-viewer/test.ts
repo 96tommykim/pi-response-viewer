@@ -353,6 +353,23 @@ completeState.restore([{ id: "cut-complete", markdown: completeMarkdown, prompt:
 const completeBounded = completeState.snapshot().responses[0];
 assert.equal(completeBounded.markdown, `${completeProse}\n\n${cutFenceText}`, "closer complete (3 backticks): an already-complete trailing fence must survive a cut landing exactly at its end, byte-for-byte");
 assert.equal(completeBounded.truncated, true);
+// The other regression: a trailing ``` is equally an ordinary fence's closer, so treating every
+// prefix of a viewer opener as a half-written opener would unterminate unrelated blocks. Both cuts
+// below land in an ordinary python fence with no viewer fence anywhere near them.
+const ordinaryFence = "```python\nprint('hi')\n```";
+const ordinaryCases: Array<[string, number, string]> = [
+	["an ordinary python fence cut exactly at its closing delimiter", ordinaryFence.length, ordinaryFence],
+	["an ordinary python fence cut one byte into its closing delimiter", ordinaryFence.length - 1, ordinaryFence.slice(0, -1)],
+];
+for (const [name, offset, expectedFence] of ordinaryCases) {
+	const ordinaryProse = "x".repeat(MAX_RESPONSE_BYTES - 2 - offset);
+	const ordinaryState = new ViewerState();
+	ordinaryState.restore([{ id: "cut-ordinary", markdown: `${ordinaryProse}\n\n${ordinaryFence}${"z".repeat(1000)}`, prompt: null, status: "complete", error: null, truncated: false }]);
+	const ordinaryBounded = ordinaryState.snapshot().responses[0];
+	assert.equal(ordinaryBounded.markdown, `${ordinaryProse}\n\n${expectedFence}`, `${name}: the cut must keep every byte it retained, since no viewer payload can exist here`);
+	assert.equal(ordinaryBounded.truncated, true, `${name}: a truncated response stays flagged truncated`);
+}
+assert.equal(ordinaryFence.endsWith("\n```"), true, "the ordinary-fence cases are only meaningful while the fence ends in a bare closer line");
 const failedState = new ViewerState(); failedState.beginTurn(); failedState.stream("partial"); failedState.fail(); failedState.settle("generic failure");
 assert.deepEqual(failedState.snapshot().responses.at(-1), { id: "live-1", markdown: "partial", prompt: null, status: "error", error: "generic failure", truncated: false });
 const retryState = new ViewerState(); retryState.beginTurn(); retryState.stream("intermediate"); retryState.fail(); retryState.stream("retry-final"); retryState.settle("generic failure");

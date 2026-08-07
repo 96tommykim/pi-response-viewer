@@ -51,9 +51,15 @@ const truncateUtf8 = (value: string, limit: number): string => {
 };
 
 const VIEWER_OPENERS = ["```pi-tool", "```pi-think"] as const;
-/** A cut inside the opener itself leaves no payload, but would still open a fence in the reader. */
+/**
+ * A cut inside the opener itself leaves no payload, but would still open a fence in the reader.
+ * The line must carry at least one character past the delimiter: a bare ``` — or one or two stray
+ * backticks — is equally the closer of an ordinary code fence, and deleting those would silently
+ * unterminate unrelated blocks. Those shorter forms cannot leak anyway, since the payload only
+ * begins after the opener's newline.
+ */
 const isPartialOpener = (line: string): boolean =>
-	line.startsWith("`") && VIEWER_OPENERS.some(opener => opener.startsWith(line) && line.length < opener.length);
+	line.length > 3 && VIEWER_OPENERS.some(opener => opener.startsWith(line) && line.length < opener.length);
 /**
  * Remove a viewer fence the byte cap cut in half. Its payload carries the nonce, and an unterminated
  * fence keeps it out of every renderer that expects the three-line shape — so it would survive raw
