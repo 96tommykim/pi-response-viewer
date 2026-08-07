@@ -5,16 +5,20 @@
   // The print-all path re-renders this string as markdown, so every tool- and user-derived
   // value is emitted literally: indented blocks, and no interpolation into markdown syntax.
   const literalBlock = text => text.split(/\r?\n/).map(line => `    ${line}`).join("\n");
+  // Tool names come from Pi's own registry, but a name is the one value interpolated into markdown
+  // syntax, and a newline in it would let the following line become a real heading. Flatten it.
+  const inlineText = text => String(text == null ? "" : text).replace(/\s+/g, " ").trim();
+  const cutNote = flag => flag === true ? "\n\n    … truncated, see terminal" : "";
   const plainMarkdown = response => {
-    const header = response.prompt && response.prompt.text ? `**Prompt**\n\n${literalBlock(response.prompt.text)}\n\n` : "";
+    const header = response.prompt && response.prompt.text ? `**Prompt**\n\n${literalBlock(response.prompt.text)}${cutNote(response.prompt.truncated)}\n\n` : "";
     const body = response.markdown.replace(/```(pi-tool|pi-think)\n(.*)\n```/g, (whole, kind, json) => {
       try {
         const payload = JSON.parse(json);
         if (payload.nonce !== window.ResponseViewerNonce) return whole;
-        if (kind === "pi-think") return `**Thinking**\n\n${literalBlock(payload.thinking)}`;
+        if (kind === "pi-think") return `**Thinking**\n\n${literalBlock(payload.thinking)}${cutNote(payload.truncated)}`;
         const status = payload.status === "ok" ? "✓" : payload.status === "error" ? "✗" : "⏳";
-        const result = payload.result ? `\n\n${literalBlock(payload.result)}` : "";
-        return `**${status} ${payload.name}**\n\n${literalBlock(payload.summary)}${result}`;
+        const result = payload.result ? `\n\n${literalBlock(payload.result)}${cutNote(payload.truncated)}` : "";
+        return `**${status} ${inlineText(payload.name)}**\n\n${literalBlock(payload.summary)}${result}`;
       } catch { return whole; }
     });
     return `${header}${body}`;
@@ -45,7 +49,7 @@
     };
     return {
       copyCurrent(button) { const response = selected(); if (response) copy(plainMarkdown(response), button); },
-      downloadCurrent() { const response = selected(); if (response) download(plainMarkdown(response), response.markdown.split(/\r?\n/).find(line => /^#{1,6}\s+/.test(line))?.replace(/^#{1,6}\s+/, "") || "response"); },
+      downloadCurrent() { const response = selected(); if (response) { const text = plainMarkdown(response); download(text, text.split(/\r?\n/).find(line => /^#{1,6}\s+/.test(line))?.replace(/^#{1,6}\s+/, "") || "response"); } },
       downloadAll() { const text = allMarkdown(); if (text) download(text, "pi-response-history"); },
       printCurrent() { print(false); }, printAll() { print(true); },
       destroy() { removeEventListener("afterprint", clearPrint); clearPrint(); },

@@ -315,6 +315,21 @@ assert.equal(Buffer.byteLength(capped.markdown, "utf8") <= MAX_RESPONSE_BYTES, t
 assert.equal(capped.truncated, true); assert.equal(capped.markdown.includes("�"), false, "UTF-8 truncation does not split a code point");
 capState.beginTurn(); capState.stream("retained latest"); capState.settle();
 assert.deepEqual(capState.snapshot().responses.map(response => response.markdown), ["retained latest"], "byte bounds drop old responses before the newest");
+
+// Fix round 1, finding 3: the byte truncator in bound() is fence-unaware, so a cut landing inside a
+// pi-tool payload destroys the closing delimiter without touching its "nonce" field. The dangling,
+// unparsable JSON — nonce included — would otherwise render raw and survive every export. The cut
+// is sized to land inside the JSON line, not at the fence's start or end.
+const cutNonce = "cut-nonce-9f2d";
+const cutFence = toolStepSegment(cutNonce, { id: "call-cut", name: "Bash", summary: "y".repeat(200), status: "ok", result: "z".repeat(200), truncated: false });
+const cutMarkdown = "x".repeat(MAX_RESPONSE_BYTES - 300) + "\n\n" + cutFence;
+const cutState = new ViewerState();
+cutState.restore([{ id: "cut", markdown: cutMarkdown, prompt: null, status: "complete", error: null, truncated: false }]);
+const cutResponse = cutState.snapshot().responses[0];
+assert.equal(Buffer.byteLength(cutResponse.markdown, "utf8") <= MAX_RESPONSE_BYTES, true, "the fence-dropping truncation still respects the byte cap");
+assert.doesNotMatch(cutResponse.markdown, /"nonce"/, "a byte cut landing inside a pi-tool fence must drop the partial fence rather than leak its raw JSON payload, nonce included");
+assert.doesNotMatch(cutResponse.markdown, /```pi-tool/, "no dangling pi-tool fence opener should survive a mid-fence byte cut");
+assert.equal(cutResponse.truncated, true);
 const failedState = new ViewerState(); failedState.beginTurn(); failedState.stream("partial"); failedState.fail(); failedState.settle("generic failure");
 assert.deepEqual(failedState.snapshot().responses.at(-1), { id: "live-1", markdown: "partial", prompt: null, status: "error", error: "generic failure", truncated: false });
 const retryState = new ViewerState(); retryState.beginTurn(); retryState.stream("intermediate"); retryState.fail(); retryState.stream("retry-final"); retryState.settle("generic failure");

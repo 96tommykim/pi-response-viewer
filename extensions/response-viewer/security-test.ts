@@ -229,6 +229,58 @@ window.print = () => { window.__printCalls++; };
     ok(exportArticle?.textContent.includes("**bold** text") && exportArticle.textContent.includes("# Heading") && !exportArticle.querySelector("h1,h2,h3,h4,h5,h6"), "print-all rendered tool-result Markdown as live formatting instead of literal text");
     ok(exportArticle?.textContent.includes("why is **this** slow?"), "print-all did not include the exported prompt text");
     dispatchEvent(new Event("afterprint"));
+    // Fix round 1, finding 1: a newline in a tool name is the one export value interpolated
+    // straight into markdown bold syntax, and CommonMark lets a heading interrupt a paragraph,
+    // so an un-flattened newline followed by "# …" would inject a real heading into the export.
+    const injectionNonceValue = "export-inj-" + Math.random().toString(36).slice(2);
+    const injectionFence = exportFence("pi-tool", { nonce: injectionNonceValue, id: "call-inj", name: "Read\\n# Injected", summary: "x", status: "ok", result: "", truncated: false });
+    window.__events.emit({ status: "complete", responses: [response("export-injection", injectionFence)], latestId: "export-injection", revision: 19, nonce: injectionNonceValue });
+    await wait(120);
+    ok(window.ResponseViewerNonce === injectionNonceValue, "test setup: injection nonce did not propagate to the client");
+    const injectionDownloadsBefore = window.__downloads.length;
+    document.getElementById("download-history").click();
+    await wait(20);
+    const injectionExported = await window.__downloads[injectionDownloadsBefore].blob.text();
+    ok(injectionExported.includes("Read # Injected") && !injectionExported.includes("Read\\n# Injected"), "a newline in a tool name was not flattened to one line in exported markdown");
+    document.getElementById("print-history").click();
+    await wait(20);
+    const injectionArticle = [...surface.querySelectorAll(".print-response")][0];
+    ok(injectionArticle?.textContent.includes("Read # Injected") && !injectionArticle.querySelector("h1,h2,h3,h4,h5,h6"), "a newline in a tool name injected a real heading into the print-all rendering");
+    dispatchEvent(new Event("afterprint"));
+    // Fix round 1, finding 2: the live reader surfaces truncation for the prompt, a thinking block,
+    // and a tool result; exported/printed Markdown must say so too, or cut content reads as complete.
+    const truncNonceValue = "export-trunc-" + Math.random().toString(36).slice(2);
+    const truncToolFence = exportFence("pi-tool", { nonce: truncNonceValue, id: "call-trunc", name: "Bash", summary: "npm test", status: "ok", result: "partial output", truncated: true });
+    const truncThinkFence = exportFence("pi-think", { nonce: truncNonceValue, thinking: "partial thought", truncated: true });
+    const notTruncToolFence = exportFence("pi-tool", { nonce: truncNonceValue, id: "call-full", name: "Bash", summary: "ls", status: "ok", result: "full output", truncated: false });
+    const truncMarkdown = [truncToolFence, "", truncThinkFence, "", notTruncToolFence].join("\\n");
+    window.__events.emit({ status: "complete", responses: [response("export-trunc", truncMarkdown, "complete", { text: "trunc prompt", truncated: true })], latestId: "export-trunc", revision: 20, nonce: truncNonceValue });
+    await wait(120);
+    ok(window.ResponseViewerNonce === truncNonceValue, "test setup: truncation nonce did not propagate to the client");
+    const truncDownloadsBefore = window.__downloads.length;
+    document.getElementById("download-history").click();
+    await wait(20);
+    const truncExported = await window.__downloads[truncDownloadsBefore].blob.text();
+    ok(truncExported.includes("trunc prompt") && truncExported.includes("partial thought") && truncExported.includes("partial output") && truncExported.includes("full output"), "truncation test setup content was missing from the export");
+    ok(truncExported.split("… truncated, see terminal").length - 1 === 3, "expected exactly three truncation notes: the prompt, the thinking block, and the truncated tool result, and none for the untruncated tool result");
+    // Fix round 1, finding 4: copy-response and download-response (the "current response" paths)
+    // were only exercised earlier against fence-free content; exercise them against a fence-bearing
+    // response too so a regression isolated to either call site would actually be caught.
+    const currentNonceValue = "export-cur-" + Math.random().toString(36).slice(2);
+    const currentToolFence = exportFence("pi-tool", { nonce: currentNonceValue, id: "call-current", name: "Grep", summary: "TODO", status: "ok", result: "3 matches", truncated: false });
+    window.__events.emit({ status: "complete", responses: [response("export-current", currentToolFence)], latestId: "export-current", revision: 21, nonce: currentNonceValue });
+    await wait(120);
+    ok(window.ResponseViewerNonce === currentNonceValue, "test setup: current-response nonce did not propagate to the client");
+    const copiedBefore = window.__copied.length;
+    document.getElementById("copy-response").click();
+    await wait(20);
+    const copiedText = window.__copied[copiedBefore];
+    ok(copiedText && !copiedText.includes(currentNonceValue) && !copiedText.includes("pi-tool") && copiedText.includes("Grep") && copiedText.includes("TODO"), "copy-response leaked a nonce or a raw pi-tool fence, or dropped the flattened tool step");
+    const downloadsBeforeCurrent = window.__downloads.length;
+    document.getElementById("download-response").click();
+    await wait(20);
+    const currentDownloadText = await window.__downloads[downloadsBeforeCurrent].blob.text();
+    ok(!currentDownloadText.includes(currentNonceValue) && !currentDownloadText.includes("pi-tool") && currentDownloadText.includes("Grep") && currentDownloadText.includes("TODO"), "download-response leaked a nonce or a raw pi-tool fence, or dropped the flattened tool step");
     document.title = "PASS: response viewer browser smoke";
   } catch (error) { document.title = "FAIL: " + (error instanceof Error ? error.message : String(error)); }
 })();
@@ -252,7 +304,7 @@ window.print = () => { window.__printCalls++; };
 			.replace('  <script src="' + asset("vendor/marked-18.0.5.umd.js") + '">', `${prelude}\n  <script src="${asset("vendor/marked-18.0.5.umd.js")}">`)
 			.replace("</body>", `${smoke}</body>`);
 		await writeFile(file, source);
-		const { stdout } = await execFile(chrome, ["--headless=new", "--window-size=1440,1000", "--dump-dom", "--run-all-compositor-stages-before-draw", "--virtual-time-budget=10000", "--allow-file-access-from-files", "--disable-background-networking", "--disable-component-update", "--use-mock-keychain", "--password-store=basic", pathToFileURL(file).href], { timeout: 30_000, maxBuffer: 5 * 1024 * 1024 });
+		const { stdout } = await execFile(chrome, ["--headless=new", "--window-size=1440,1000", "--dump-dom", "--run-all-compositor-stages-before-draw", "--virtual-time-budget=20000", "--allow-file-access-from-files", "--disable-background-networking", "--disable-component-update", "--use-mock-keychain", "--password-store=basic", pathToFileURL(file).href], { timeout: 45_000, maxBuffer: 5 * 1024 * 1024 });
 		const title = stdout.match(/<title>([\s\S]*?)<\/title>/i)?.[1];
 		assert.equal(title, "PASS: response viewer browser smoke", `browser smoke failed: ${title ?? "missing title"}`);
 		console.log(title);

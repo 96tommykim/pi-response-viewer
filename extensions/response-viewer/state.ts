@@ -50,6 +50,10 @@ const truncateUtf8 = (value: string, limit: number): string => {
 	return value.slice(0, end);
 };
 
+const VIEWER_FENCE = /\n?```(?:pi-tool|pi-think)\n[^\n]*$/;
+/** Remove a viewer fence the byte cap cut in half, whose payload would otherwise render raw. */
+const dropPartialFence = (value: string): string => value.replace(VIEWER_FENCE, "");
+
 /**
  * A turn holds every message of one prompt, so it can outgrow the byte cap on its own. Drop whole
  * oldest messages rather than let a byte prefix survive: the newest text is what the reader needs.
@@ -475,7 +479,7 @@ export class ViewerState {
 		while (this.responses.length > 1 && this.totalBytes() > MAX_RESPONSE_BYTES) this.responses.shift();
 		const latest = this.responses.at(-1);
 		if (latest && utf8Bytes(latest.markdown) > MAX_RESPONSE_BYTES) {
-			this.responses[this.responses.length - 1] = { ...latest, markdown: truncateUtf8(latest.markdown, MAX_RESPONSE_BYTES), truncated: true };
+			this.responses[this.responses.length - 1] = { ...latest, markdown: dropPartialFence(truncateUtf8(latest.markdown, MAX_RESPONSE_BYTES)), truncated: true };
 		}
 	}
 
