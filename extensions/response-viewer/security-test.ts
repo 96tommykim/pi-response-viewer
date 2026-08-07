@@ -168,15 +168,31 @@ window.print = () => { window.__printCalls++; };
     const shortHeader = body.querySelector(".response-prompt");
     ok(shortHeader?.querySelector(".response-prompt-text")?.textContent === shortPrompt, "prompt header text did not match the prompt");
     ok(shortHeader?.classList.contains("response-prompt-open") && !shortHeader.querySelector(".response-prompt-toggle"), "a short prompt should render open with no toggle");
+    ok(!shortHeader.querySelector(".response-prompt-cut"), "a non-truncated prompt rendered a truncation marker");
     const longPrompt = "line one\\nline two\\nline three\\nline four\\nline five";
     window.__events.emit({ status: "complete", responses: [response("prompt-long", "long answer", "complete", { text: longPrompt, truncated: false })], latestId: "prompt-long", revision: 13 });
     await wait(80);
-    const longHeader = body.querySelector(".response-prompt"), toggle = longHeader?.querySelector(".response-prompt-toggle");
+    let longHeader = body.querySelector(".response-prompt"), toggle = longHeader?.querySelector(".response-prompt-toggle");
     ok(toggle && !longHeader.classList.contains("response-prompt-open") && toggle.textContent === "Show more" && toggle.getAttribute("aria-expanded") === "false", "a long prompt did not clamp behind a collapsed toggle");
     toggle.click();
     ok(longHeader.classList.contains("response-prompt-open") && toggle.textContent === "Show less" && toggle.getAttribute("aria-expanded") === "true", "the prompt toggle did not expand the header on click");
+    // renderNow() replaces body.innerHTML on every markdown delta while a response streams; the
+    // expanded state must survive that re-render for the same response id, not silently re-collapse.
+    window.__events.emit({ status: "running", responses: [response("prompt-long", "long answer continues streaming", "running", { text: longPrompt, truncated: false })], latestId: "prompt-long", revision: 14 });
+    await wait(80);
+    longHeader = body.querySelector(".response-prompt"); toggle = longHeader?.querySelector(".response-prompt-toggle");
+    ok(longHeader?.classList.contains("response-prompt-open") && toggle?.textContent === "Show less" && toggle?.getAttribute("aria-expanded") === "true", "the expanded prompt state did not survive a streaming re-render of the same response");
+    // A different response id must start collapsed: expansion state is tracked per response, not globally.
+    window.__events.emit({ status: "complete", responses: [response("prompt-long-2", "another long answer", "complete", { text: longPrompt, truncated: false })], latestId: "prompt-long-2", revision: 15 });
+    await wait(80);
+    const otherHeader = body.querySelector(".response-prompt"), otherToggle = otherHeader?.querySelector(".response-prompt-toggle");
+    ok(otherToggle && !otherHeader.classList.contains("response-prompt-open") && otherToggle.textContent === "Show more", "a different response id inherited another response's expanded prompt state");
+    window.__events.emit({ status: "complete", responses: [response("prompt-truncated", "truncated prompt answer", "complete", { text: "cut here", truncated: true })], latestId: "prompt-truncated", revision: 16 });
+    await wait(80);
+    const truncatedHeader = body.querySelector(".response-prompt");
+    ok(truncatedHeader?.querySelector(".response-prompt-cut")?.textContent === "… prompt truncated, see terminal", "a truncated prompt did not render a truncation marker");
     const hostilePrompt = "check <script>window.__promptPwned=1<\\/script> please";
-    window.__events.emit({ status: "complete", responses: [response("prompt-hostile", "hostile answer", "complete", { text: hostilePrompt, truncated: false })], latestId: "prompt-hostile", revision: 14 });
+    window.__events.emit({ status: "complete", responses: [response("prompt-hostile", "hostile answer", "complete", { text: hostilePrompt, truncated: false })], latestId: "prompt-hostile", revision: 17 });
     await wait(80);
     const hostileHeader = body.querySelector(".response-prompt");
     ok(hostileHeader?.querySelector(".response-prompt-text")?.textContent === hostilePrompt && !hostileHeader.querySelector("script") && window.__promptPwned === undefined, "hostile prompt text was not inserted inertly as literal text");

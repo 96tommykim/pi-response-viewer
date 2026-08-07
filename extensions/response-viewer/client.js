@@ -4,9 +4,9 @@
   const body = $("response-body"), outline = $("outline-links"), outlinePanel = $("response-outline"), status = $("status"), title = $("response-title"), meta = $("response-meta"), newContent = $("new-content"), toolbar = document.querySelector(".toolbar"), historyControl = $("history-control"), previous = $("previous-response"), next = $("next-response"), historyPosition = $("history-position"), navigatorPanel = $("response-navigator"), navigatorRoot = $("navigator-list"), navigatorInput = $("navigator-search"), navigatorCount = $("navigator-count");
   const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)"), narrow = matchMedia("(max-width: 1180px)");
   let raw = "", renderedId = null, revision = -1, following = true, events, destroyed = false, reconnecting = false, scrollGuardUntil = 0, scrollRaf = 0, followRaf = 0, toggleRaf = 0, renderTimer = 0, pendingHash = "", outlineInitialized = false, headings = [], activeLink, snapshot, selectedId = null, pendingRender, responseNavigator, exporter;
-  const codePreferences = new Map(), maxCodePreferences = 256, MAX_SPECIAL_FENCES = 64, MAX_TOOL_FENCES = 256;
+  const codePreferences = new Map(), maxCodePreferences = 256, MAX_SPECIAL_FENCES = 64, MAX_TOOL_FENCES = 256, promptExpansions = new Set();
   const rememberCodePreference = (responseId, index, patch) => { let response = codePreferences.get(responseId); if (!response) { response = new Map(); codePreferences.set(responseId, response); } let preference = response.get(index); if (!preference) { if (response.size >= maxCodePreferences) return; preference = { wrapped: false, expanded: false }; response.set(index, preference); } Object.assign(preference, patch); if (!preference.wrapped && !preference.expanded) response.delete(index); if (!response.size) codePreferences.delete(responseId); };
-  const pruneCodePreferences = responses => { const ids = new Set(responses.map(response => response.id)); for (const id of codePreferences.keys()) if (!ids.has(id)) codePreferences.delete(id); };
+  const pruneCodePreferences = responses => { const ids = new Set(responses.map(response => response.id)); for (const id of codePreferences.keys()) if (!ids.has(id)) codePreferences.delete(id); for (const id of promptExpansions) if (!ids.has(id)) promptExpansions.delete(id); };
   const announce = text => { status.textContent = text; };
   const nearBottom = () => innerHeight + scrollY >= document.documentElement.scrollHeight - 140;
   const pauseFollow = () => { following = false; };
@@ -80,13 +80,23 @@
         const header = document.createElement("div"); header.className = "response-prompt";
         const text = document.createElement("div"); text.className = "response-prompt-text"; text.textContent = response.prompt.text;
         header.append(text);
+        // truncateUtf8 cuts at a byte boundary with no marker, so an expanded prompt would otherwise
+        // read as complete. The response body surfaces the same state in the chrome bar.
+        if (response.prompt.truncated) {
+          const cut = document.createElement("span"); cut.className = "response-prompt-cut";
+          cut.textContent = "… prompt truncated, see terminal";
+          header.append(cut);
+        }
         if (response.prompt.truncated || response.prompt.text.split(/\r?\n/).length > 3 || response.prompt.text.length > 200) {
+          const open = promptExpansions.has(response.id);
+          header.classList.toggle("response-prompt-open", open);
           const toggle = document.createElement("button"); toggle.type = "button"; toggle.className = "response-prompt-toggle";
-          toggle.textContent = "Show more"; toggle.setAttribute("aria-expanded", "false");
+          toggle.textContent = open ? "Show less" : "Show more"; toggle.setAttribute("aria-expanded", String(open));
           toggle.addEventListener("click", () => {
-            const open = header.classList.toggle("response-prompt-open");
-            toggle.textContent = open ? "Show less" : "Show more";
-            toggle.setAttribute("aria-expanded", String(open));
+            const next = header.classList.toggle("response-prompt-open");
+            if (next) promptExpansions.add(response.id); else promptExpansions.delete(response.id);
+            toggle.textContent = next ? "Show less" : "Show more";
+            toggle.setAttribute("aria-expanded", String(next));
           });
           header.append(toggle);
         } else header.classList.add("response-prompt-open");
@@ -109,7 +119,7 @@
   copyResponse.addEventListener("click", () => exporter.copyCurrent(copyResponse)); $("download-response").addEventListener("click", () => exporter.downloadCurrent()); $("download-history").addEventListener("click", () => exporter.downloadAll()); $("print-response").addEventListener("click", () => exporter.printCurrent()); $("print-history").addEventListener("click", () => exporter.printAll());
   const commandSearch = event => { if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") { event.preventDefault(); responseNavigator.focus(); } }; addEventListener("keydown", commandSearch);
   previous.addEventListener("click", () => choose(-1)); next.addEventListener("click", () => choose(1));
-  const cleanup = () => { if (destroyed) return; destroyed = true; if (events) events.close(); if (renderTimer) clearTimeout(renderTimer); if (scrollRaf) cancelAnimationFrame(scrollRaf); if (followRaf) cancelAnimationFrame(followRaf); if (toggleRaf) cancelAnimationFrame(toggleRaf); headings = []; activeLink = undefined; codePreferences.clear(); responseNavigator?.destroy(); exporter?.destroy(); removeEventListener("keydown", commandSearch); removeEventListener("scroll", scheduleSync); removeEventListener("hashchange", hashNavigation); narrow.removeEventListener("change", mediaChange); outlinePanel.removeEventListener("toggle", outlineToggle); };
+  const cleanup = () => { if (destroyed) return; destroyed = true; if (events) events.close(); if (renderTimer) clearTimeout(renderTimer); if (scrollRaf) cancelAnimationFrame(scrollRaf); if (followRaf) cancelAnimationFrame(followRaf); if (toggleRaf) cancelAnimationFrame(toggleRaf); headings = []; activeLink = undefined; codePreferences.clear(); promptExpansions.clear(); responseNavigator?.destroy(); exporter?.destroy(); removeEventListener("keydown", commandSearch); removeEventListener("scroll", scheduleSync); removeEventListener("hashchange", hashNavigation); narrow.removeEventListener("change", mediaChange); outlinePanel.removeEventListener("toggle", outlineToggle); };
   const receive = nextSnapshot => {
     if (!nextSnapshot || destroyed) return; if (nextSnapshot.status === "closed") { cleanup(); return; } if (nextSnapshot.revision <= revision) return;
     const priorLatest = snapshot?.latestId, priorSelected = selectedId, wasReconnecting = reconnecting; snapshot = nextSnapshot; revision = nextSnapshot.revision;
