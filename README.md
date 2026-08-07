@@ -4,7 +4,7 @@ A local, output-only browser reader for [Pi](https://github.com/earendil-works/p
 
 ## Features
 
-- Per-turn response history, limited to 30 responses and 2 MiB in memory
+- Per-turn response history, limited to 30 responses and 4 MiB in memory, with 8 KiB per tool result and per thinking block and 2 KiB per prompt
 - Complete turns: every assistant message is kept, so text written before each tool call stays visible, separated by a rule
 - Prompt header on every response, plus inline tool steps and collapsible thinking
 - Streaming Markdown with sanitized HTML, safe links, tables, lists, and headings
