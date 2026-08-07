@@ -293,6 +293,13 @@ assert.equal(oversizedRestored.truncated, oversizedResponse.truncated, "live and
 // `active.done` holds the whole turn. Both go through fitTurn so the newest committed segment is
 // protected there too. This drives the shape that reaches the rebuild — an oversized message ending
 // in a tool call that never receives a result, which settle() closes as "Interrupted.".
+//
+// SHAPE GUARD, NOT A REPRODUCED DEFECT. Reverting settle()'s rebuild to fitSegments(done, closed)
+// alone leaves this green, because fit() currently guarantees join(done) <= MAX_RESPONSE_BYTES by the
+// time settle() runs — it re-fits on every publish, and beginMessage()/fail() only move `current`,
+// which the preceding fit() already counted. Nothing enforces that guarantee, so this exists to catch
+// a future change to fit(), beginMessage(), or fail() that breaks it: the failure mode is a blank
+// response. Read it as pinning the shape, not as proven coverage of a bug that once shipped.
 const oversizedStepLive = new ViewerState();
 oversizedStepLive.beginTurn();
 oversizedStepLive.commitMessage({ role: "assistant", content: [
