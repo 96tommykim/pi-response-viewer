@@ -74,7 +74,26 @@
     const response = selected(); if (!response) { raw = ""; renderedId = null; body.replaceChildren(); headings = []; outline.replaceChildren(); updateChrome(); return; }
     const identityChanged = renderedId !== response.id, changed = identityChanged || raw !== response.markdown, wasFollowing = following && nearBottom();
     let hashHandled = false;
-    if (changed) { raw = response.markdown; renderedId = response.id; body.innerHTML = window.ResponseViewerRenderer.render(raw); decorate(response.id); hashHandled = jumpToHash(); }
+    if (changed) {
+      raw = response.markdown; renderedId = response.id; body.innerHTML = window.ResponseViewerRenderer.render(raw);
+      if (response.prompt && response.prompt.text) {
+        const header = document.createElement("div"); header.className = "response-prompt";
+        const text = document.createElement("div"); text.className = "response-prompt-text"; text.textContent = response.prompt.text;
+        header.append(text);
+        if (response.prompt.truncated || response.prompt.text.split(/\r?\n/).length > 3 || response.prompt.text.length > 200) {
+          const toggle = document.createElement("button"); toggle.type = "button"; toggle.className = "response-prompt-toggle";
+          toggle.textContent = "Show more"; toggle.setAttribute("aria-expanded", "false");
+          toggle.addEventListener("click", () => {
+            const open = header.classList.toggle("response-prompt-open");
+            toggle.textContent = open ? "Show less" : "Show more";
+            toggle.setAttribute("aria-expanded", String(open));
+          });
+          header.append(toggle);
+        } else header.classList.add("response-prompt-open");
+        body.prepend(header);
+      }
+      decorate(response.id); hashHandled = jumpToHash();
+    }
     // A missing fragment must not suppress follow or survive into another response.
     if ((response.status === "complete" || response.status === "error") && pendingHash) clearHash();
     if (changed && !hashHandled && !pendingHash && !identityChanged && wasFollowing && response.id === snapshot.latestId) { if (followRaf) cancelAnimationFrame(followRaf); followRaf = requestAnimationFrame(() => { followRaf = 0; if (!destroyed && following) scrollLatest(false); }); } else if (changed && !hashHandled && !pendingHash && !wasFollowing && response.id === snapshot.latestId) { following = false; newContent.hidden = false; } if (changed) scheduleSync();

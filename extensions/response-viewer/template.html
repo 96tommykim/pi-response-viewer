@@ -89,6 +89,10 @@
     .tool-step-error .tool-step-glyph { color: #d33; }
     .tool-step-result > pre, .thinking-view > pre { white-space: pre-wrap; max-height: 22rem; overflow: auto; }
     .thinking-view { opacity: 0.75; font-size: 0.9em; margin: 0.5rem 0; }
+    .response-prompt { border-left: 3px solid var(--accent, #6a9); padding: 0.4rem 0 0.4rem 0.7rem; margin: 0 0 1.2rem; opacity: 0.85; }
+    .response-prompt-text { white-space: pre-wrap; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+    .response-prompt-open .response-prompt-text { display: block; overflow: visible; }
+    .response-prompt-toggle { background: none; border: 0; padding: 0.2rem 0; font: inherit; font-size: 0.85em; opacity: 0.8; cursor: pointer; }
     /* Successive tool steps otherwise stack a rule between every chip. */
     .context-block + hr, hr + .context-block { display: none; }
     table { width:100%; min-width:660px; border-collapse:collapse; font-size:13px; }

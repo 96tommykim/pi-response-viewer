@@ -729,6 +729,7 @@ assert.match(client, /ResponseViewerFences\.render\(language\[0\]/);
 assert.match(client, /ResponseViewerNavigator\.create/);
 assert.match(client, /ResponseViewerExport\.create/);
 assert.match(client, /ResponseViewerMermaid\.onThemeChange\(\)/);
+assert.match(client, /response-prompt/, "the prompt header is rendered");
 assert.match(syntaxSource, /Prism\.manual/);
 assert.match(syntaxSource, /ALLOWED_TAGS: \["span"\]/);
 assert.match(syntaxSource, /\["mermaid", \["mermaid", "Mermaid"\]\]/);
@@ -736,6 +737,7 @@ assert.match(syntaxSource, /\["tree", \["tree", "Tree"\]\]/); assert.match(synta
 assert.match(prismLicense, /MIT LICENSE/i); assert.match(markedLicense, /MIT license/i); assert.match(dompurifyLicense, /Apache License/i); assert.match(mermaidLicense, /MIT License/i);
 assert.doesNotMatch(`${template}\n${syntaxSource}`, /https?:\/\//, "production template and syntax helper contain no remote URL");
 assert.match(rendererSource, /(?:title|filename)/); assert.match(rendererSource, /slice\(0, 512\)/); assert.match(fenceSource, /MAX_SOURCE/); assert.match(diffSource, /MAX_LINES/); assert.match(jsonSource, /MAX_NODES/); assert.match(csvSource, /MAX_CELLS/); assert.match(navigatorSource, /ResponseViewerNavigator/); assert.match(navigatorSource, /if \(needle\) \{[\s\S]*item\.folded === undefined/); assert.match(navigatorSource, /else \{[\s\S]*item\.folded = undefined/); assert.match(navigatorSource, /originalRange/); assert.doesNotMatch(navigatorSource, /ranges/); assert.match(exportSource, /createObjectURL/);
+assert.match(navigatorSource, /prompt/, "the navigator labels responses by prompt");
 assert.doesNotMatch(mermaidViewSource, /https?:\/\//, "mermaid wrapper contains no remote URL");
 // The SVG namespace URI is a required literal, not a fetched remote reference.
 assert.match(treeViewSource, /http:\/\/www\.w3\.org\/2000\/svg/, "tree icons use the standard SVG namespace");

@@ -3,7 +3,7 @@
   const concise = value => (String(value || "").split(/\r?\n/).find(line => line.trim() && !/^\s*```/.test(line)) || "Response viewer").replace(/<[^>]*>/g, "").replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/^[\s>#*`~\-\d.)]+/, "").replace(/[\*_`~]/g, "").trim().replace(/\s+/g, " ").slice(0, 96) || "Response viewer";
   const summary = response => {
     const markdown = String(response.markdown || ""), heading = /^\s{0,3}#{1,6}\s+(.+)$/m.exec(markdown)?.[1];
-    return { id: response.id, title: concise(heading || markdown), snippet: concise(markdown), markdown, folded: undefined, status: response.status, truncated: response.truncated };
+    return { id: response.id, title: concise(response.prompt?.text || heading || markdown), snippet: concise(markdown), markdown, folded: undefined, status: response.status, truncated: response.truncated };
   };
   const MAX_FOLD_SOURCE = 2 * 1024 * 1024;
   const clusterAt = (source, start) => {
