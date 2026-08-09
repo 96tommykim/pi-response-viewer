@@ -42,7 +42,7 @@ assert.doesNotMatch(grouped[1].markdown, /provider error text|aborted text/, "fa
 // isError result must close the step as "error" (not left "running") with its text attached.
 const unmatchedRestore = responseHistory([
 	{ type: "message", id: "user-unmatched", message: { role: "user", content: [{ type: "text", text: "q" }] } },
-	{ type: "message", message: { role: "assistant", content: [{ type: "toolCall", id: "real-call", name: "Bash", arguments: { command: "npm test" } }] } },
+	{ type: "message", message: { role: "assistant", content: [{ type: "toolCall", id: "real-call", name: "Bash", arguments: { command: "node --test" } }] } },
 	{ type: "message", message: { role: "toolResult", toolCallId: "no-such-call", content: [{ type: "text", text: "orphan result" }], isError: false } },
 	{ type: "message", message: { role: "toolResult", toolCallId: "real-call", content: [{ type: "text", text: "test failed" }], isError: true } },
 ], restoreNonce);
@@ -71,7 +71,7 @@ assert.equal(orphanedStep?.result, "Interrupted.");
 // does live — the restore path must not be last-write-wins while the live path is first-write-wins.
 const duplicateRestore = responseHistory([
 	{ type: "message", id: "user-dup", message: { role: "user", content: [{ type: "text", text: "q" }] } },
-	{ type: "message", message: { role: "assistant", content: [{ type: "toolCall", id: "dup-call", name: "Bash", arguments: { command: "npm test" } }] } },
+	{ type: "message", message: { role: "assistant", content: [{ type: "toolCall", id: "dup-call", name: "Bash", arguments: { command: "node --test" } }] } },
 	{ type: "message", message: { role: "toolResult", toolCallId: "dup-call", content: [{ type: "text", text: "first result" }], isError: false } },
 	{ type: "message", message: { role: "toolResult", toolCallId: "dup-call", content: [{ type: "text", text: "second result" }], isError: true } },
 ], restoreNonce);
@@ -136,7 +136,7 @@ assert.equal(whitespaceLive.snapshot().responses.at(-1)!.prompt, null, "a prompt
 
 // --- turn context: pure conversion ---
 const NONCE = "test-nonce";
-assert.equal(summarizeArguments({ command: "npm  test\n--silent" }), "npm test --silent", "command wins and whitespace collapses");
+assert.equal(summarizeArguments({ command: "node  --test\n--silent" }), "node --test --silent", "command wins and whitespace collapses");
 assert.equal(summarizeArguments({ file_path: "a/b.ts", command: "ls" }), "ls", "key precedence is command before file_path");
 assert.equal(summarizeArguments({ pattern: "foo" }), "foo");
 assert.equal(summarizeArguments({ weird: 3 }), '{"weird":3}', "unknown shapes fall back to JSON");
@@ -213,7 +213,7 @@ assert.equal(live.markdown.split(SEGMENT_SEPARATOR)[0], "looking now", "other se
 assert.equal(contextState.completeStep("call-missing", "x", false), false, "an unknown tool call id is ignored");
 
 contextState.commitMessage({ role: "assistant", content: [
-	{ type: "toolCall", id: "call-2", name: "Bash", arguments: { command: "npm test" } },
+	{ type: "toolCall", id: "call-2", name: "Bash", arguments: { command: "node --test" } },
 ] });
 contextState.settle("failed");
 const settled = contextState.snapshot().responses.at(-1)!;
@@ -675,7 +675,7 @@ assert.deepEqual(contentSegments({ role: "user", content: [{ type: "text", text:
 	handlers.get("message_update")!({ message: { role: "assistant", content: [{ type: "text", text: "checking" }] } }, ctx);
 	handlers.get("message_end")!({ message: { role: "assistant", content: [
 		{ type: "text", text: "checking" },
-		{ type: "toolCall", id: "c1", name: "Bash", arguments: { command: "npm test" } },
+		{ type: "toolCall", id: "c1", name: "Bash", arguments: { command: "node --test" } },
 	] } }, ctx);
 	handlers.get("message_end")!({ message: { role: "toolResult", toolCallId: "c1", toolName: "Bash", content: [{ type: "text", text: "3 passed" }], isError: false } }, ctx);
 	// Whichever source Pi actually uses, the first delivery wins and the second changes nothing.
@@ -688,7 +688,7 @@ assert.deepEqual(contentSegments({ role: "user", content: [{ type: "text", text:
 	const steps = response.markdown.split(SEGMENT_SEPARATOR).map(segment => parseToolStep(segment, final.nonce)).filter(Boolean);
 	assert.equal(steps.length, 1);
 	assert.equal(steps[0]!.name, "Bash");
-	assert.equal(steps[0]!.summary, "npm test");
+	assert.equal(steps[0]!.summary, "node --test");
 	assert.equal(steps[0]!.status, "ok");
 	assert.equal(steps[0]!.result, "3 passed", "the first delivery wins; the second is ignored");
 	assert.equal(response.status, "complete");
@@ -863,7 +863,7 @@ assert.match(syntaxSource, /\["mermaid", \["mermaid", "Mermaid"\]\]/);
 assert.match(syntaxSource, /\["tree", \["tree", "Tree"\]\]/); assert.match(syntaxSource, /\["diff", \["diff", "Diff"\]\]/); assert.match(syntaxSource, /\["csv", \["csv", "CSV"\]\]/);
 assert.match(prismLicense, /MIT LICENSE/i); assert.match(markedLicense, /MIT license/i); assert.match(dompurifyLicense, /Apache License/i); assert.match(mermaidLicense, /MIT License/i);
 assert.doesNotMatch(`${template}\n${syntaxSource}`, /https?:\/\//, "production template and syntax helper contain no remote URL");
-assert.match(rendererSource, /(?:title|filename)/); assert.match(rendererSource, /slice\(0, 512\)/); assert.match(fenceSource, /MAX_SOURCE/); assert.match(diffSource, /MAX_LINES/); assert.match(jsonSource, /MAX_NODES/); assert.match(csvSource, /MAX_CELLS/); assert.match(navigatorSource, /ResponseViewerNavigator/); assert.match(navigatorSource, /if \(needle\) \{[\s\S]*item\.folded === undefined/); assert.match(navigatorSource, /else \{[\s\S]*item\.folded = undefined/); assert.match(navigatorSource, /originalRange/); assert.doesNotMatch(navigatorSource, /ranges/); assert.match(exportSource, /createObjectURL/);
+assert.match(rendererSource, /(?:title|filename)/); assert.match(rendererSource, /slice\(0, 512\)/); assert.match(fenceSource, /MAX_SOURCE/); assert.match(diffSource, /MAX_LINES/); assert.match(jsonSource, /MAX_NODES/); assert.match(csvSource, /MAX_CELLS/); assert.match(navigatorSource, /ResponseViewerNavigator/); assert.match(navigatorSource, /foldedText/); assert.match(navigatorSource, /Uint32Array/); assert.match(navigatorSource, /visibleMap/); assert.match(navigatorSource, /projectedRoot/); assert.match(navigatorSource, /MAX_MATCHES = 500/); assert.match(navigatorSource, /const ranges/); assert.match(exportSource, /createObjectURL/);
 assert.match(exportSource, /plainMarkdown/, "export strips viewer-private fences");
 assert.match(exportSource, /pi-tool/);
 assert.doesNotMatch(mermaidViewSource, /https?:\/\//, "mermaid wrapper contains no remote URL");

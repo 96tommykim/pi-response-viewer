@@ -28,6 +28,7 @@ Object.defineProperty(navigator, "clipboard", { configurable: true, value: { wri
 URL.createObjectURL = blob => { window.__downloads.push({ blob }); return "blob:viewer-test"; }; URL.revokeObjectURL = () => {};
 HTMLAnchorElement.prototype.click = function() { window.__downloads[window.__downloads.length - 1].name = this.download; };
 window.print = () => { window.__printCalls++; };
+Element.prototype.scrollIntoView = function(options) { window.__scrollTarget = this; window.__scrollOptions = options; };
 </script>`;
 		const smoke = `<script>
 (async () => {
@@ -252,7 +253,7 @@ window.print = () => { window.__printCalls++; };
     // Fix round 1, finding 2: the live reader surfaces truncation for the prompt, a thinking block,
     // and a tool result; exported/printed Markdown must say so too, or cut content reads as complete.
     const truncNonceValue = "export-trunc-" + Math.random().toString(36).slice(2);
-    const truncToolFence = exportFence("pi-tool", { nonce: truncNonceValue, id: "call-trunc", name: "Bash", summary: "npm test", status: "ok", result: "partial output", truncated: true });
+    const truncToolFence = exportFence("pi-tool", { nonce: truncNonceValue, id: "call-trunc", name: "Bash", summary: "node --test", status: "ok", result: "partial output", truncated: true });
     const truncThinkFence = exportFence("pi-think", { nonce: truncNonceValue, thinking: "partial thought", truncated: true });
     const notTruncToolFence = exportFence("pi-tool", { nonce: truncNonceValue, id: "call-full", name: "Bash", summary: "ls", status: "ok", result: "full output", truncated: false });
     const truncMarkdown = [truncToolFence, "", truncThinkFence, "", notTruncToolFence].join("\\n");
@@ -369,6 +370,166 @@ window.print = () => { window.__printCalls++; };
     search.value = "nonce"; search.dispatchEvent(new Event("input", { bubbles: true }));
     ok(await pollUntil(() => [...document.querySelectorAll(".navigator-detail")].every(node => !node.textContent.includes(navNonceValue))), "searching the word nonce surfaced the session nonce");
     search.value = ""; search.dispatchEvent(new Event("input", { bubbles: true }));
+    // Match-level navigation keeps the nonce-safe projection, but moves among individual hits in
+    // response order and marks only the rendered response content — never navigator or toolbar text.
+    const matchNonceValue = "match-" + Math.random().toString(36).slice(2);
+    const matchThinkingFence = exportFence("pi-think", { nonce: matchNonceValue, thinking: "thinking needle", truncated: false });
+    const matchToolFence = exportFence("pi-tool", { nonce: matchNonceValue, id: "call-match", name: "Read", summary: "state.ts", status: "ok", result: "tool needle", truncated: false });
+    const matchOne = "# One\\n\\nneedle first\\n\\nneedle second";
+    const matchTwo = ["# Two", "plain needle", matchThinkingFence, matchToolFence].join("\\n\\n");
+    window.__events.emit({ status: "complete", responses: [response("match-one", matchOne), response("match-two", matchTwo)], latestId: "match-two", revision: 28, nonce: matchNonceValue });
+    ok(await pollUntil(() => body.textContent.includes("plain needle") && window.ResponseViewerNonce === matchNonceValue), "match-navigation fixture did not render");
+    const previousMatch = document.getElementById("previous-match"), nextMatch = document.getElementById("next-match"), matchControls = document.getElementById("navigator-match-controls"), matchCount = document.getElementById("navigator-match-count");
+    search.value = "Readstate.ts"; search.dispatchEvent(new Event("input", { bubbles: true }));
+    ok(matchCount.textContent === "0 of 0 matches" && !document.querySelector(".navigator-item"), "tool-row flex spacing was missing from the searchable projection");
+    search.value = "Read state.ts"; search.dispatchEvent(new Event("input", { bubbles: true })); nextMatch.click();
+    ok(await pollUntil(() => [...body.querySelectorAll("mark.response-search-match")].map(mark => mark.textContent).join("") === "Read state.ts"), "a semantic space between tool name and summary was not searchable");
+    search.value = "needle"; search.dispatchEvent(new Event("input", { bubbles: true }));
+    ok(!matchControls.hidden && !previousMatch.disabled && !nextMatch.disabled && matchCount.textContent === "0 of 5 matches", "non-empty search did not expose enabled match controls with an honest count");
+    document.querySelector('.navigator-item[data-response-id="match-one"]').click();
+    ok(await pollUntil(() => body.textContent.includes("needle first") && body.querySelector("mark.response-search-match")?.textContent === "needle"), "clicking a filtered response did not select and highlight its first match");
+    ok(matchCount.textContent === "1 of 5 matches" && window.__scrollTarget?.classList.contains("response-search-match"), "click-to-first-match did not update the position or scroll target");
+    search.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    ok(await pollUntil(() => matchCount.textContent === "2 of 5 matches" && body.textContent.includes("needle second")), "Enter did not advance to the next occurrence in the same response");
+    search.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", shiftKey: true, bubbles: true }));
+    ok(await pollUntil(() => matchCount.textContent === "1 of 5 matches"), "Shift+Enter did not return to the previous occurrence");
+    nextMatch.click();
+    ok(await pollUntil(() => matchCount.textContent === "2 of 5 matches"), "Next match button did not navigate");
+    nextMatch.click();
+    ok(await pollUntil(() => body.textContent.includes("plain needle") && matchCount.textContent === "3 of 5 matches"), "navigation did not continue into the next retained response");
+    nextMatch.click();
+    ok(await pollUntil(() => body.querySelector(".thinking-view")?.open && matchCount.textContent === "4 of 5 matches"), "a thinking match did not open its disclosure");
+    nextMatch.click();
+    ok(await pollUntil(() => body.querySelector(".tool-step-result")?.open && matchCount.textContent === "5 of 5 matches"), "a tool-result match did not open its disclosure");
+    nextMatch.click();
+    ok(await pollUntil(() => matchCount.textContent === "1 of 5 matches" && body.textContent.includes("needle first")), "match navigation did not cycle across retained responses");
+    window.__events.emit({ status: "running", responses: [response("match-one", matchOne + "\\n\\nstreamed needle", "running"), response("match-two", matchTwo)], latestId: "match-one", revision: 29, nonce: matchNonceValue });
+    ok(await pollUntil(() => body.textContent.includes("streamed needle") && matchCount.textContent === "1 of 6 matches" && body.querySelector("mark.response-search-match")?.textContent === "needle"), "streaming update did not rerender the selected response and preserve its highlight");
+    const matchDownloadsBefore = window.__downloads.length;
+    document.getElementById("download-response").click();
+    ok(await pollUntil(() => window.__downloads.length > matchDownloadsBefore), "search-state download did not complete");
+    ok(!(await window.__downloads[matchDownloadsBefore].blob.text()).includes("response-search-match"), "search markup leaked into downloaded Markdown");
+    document.getElementById("print-response").click();
+    ok(!surface.querySelector("mark.response-search-match"), "search markup leaked into Print current");
+    dispatchEvent(new Event("afterprint"));
+    search.value = matchNonceValue; search.dispatchEvent(new Event("input", { bubbles: true }));
+    ok(matchCount.textContent === "0 of 0 matches" && !body.querySelector("mark.response-search-match") && !document.title.includes(matchNonceValue) && ![...document.querySelectorAll(".navigator-title,.navigator-detail")].some(node => node.textContent.includes(matchNonceValue)), "match navigation exposed the session nonce");
+    const cappedMatches = Array.from({ length: 501 }, () => "needle").join(" ");
+    window.__events.emit({ status: "complete", responses: [response("match-capped", cappedMatches)], latestId: "match-capped", revision: 30, nonce: matchNonceValue });
+    ok(await pollUntil(() => body.textContent.includes("needle")), "capped-match fixture did not render");
+    search.value = "needle"; search.dispatchEvent(new Event("input", { bubbles: true }));
+    ok(matchCount.textContent === "0 of 500+ matches", "the visible match cap was not disclosed honestly");
+    search.value = ""; search.dispatchEvent(new Event("input", { bubbles: true }));
+    ok(matchControls.hidden && previousMatch.disabled && nextMatch.disabled && !body.querySelector("mark.response-search-match"), "clearing search did not reset match controls and highlights");
+    // Empty-query previews stay useful without rendering a detached search projection, and remain
+    // unchanged after a query has built then released that projection.
+    const previewNonce = "preview-" + Math.random().toString(36).slice(2), ordinaryPreview = "Useful no-heading preview needle stays stable.";
+    window.__events.emit({ status: "complete", responses: [response("ordinary-preview", ordinaryPreview)], latestId: "ordinary-preview", revision: 31, nonce: previewNonce });
+    ok(await pollUntil(() => document.querySelector(".navigator-detail")?.textContent.includes(ordinaryPreview)), "an ordinary no-heading response lost its empty-query preview");
+    const previewBeforeSearch = document.querySelector(".navigator-detail").textContent;
+    ok(!previewBeforeSearch.includes(previewNonce), "the empty-query preview exposed the session nonce");
+    search.value = "needle"; search.dispatchEvent(new Event("input", { bubbles: true }));
+    const previewDuringSearch = document.querySelector(".navigator-detail").textContent;
+    search.value = ""; search.dispatchEvent(new Event("input", { bubbles: true }));
+    const previewAfterSearch = document.querySelector(".navigator-detail").textContent;
+    ok(previewDuringSearch === previewBeforeSearch && previewAfterSearch === previewBeforeSearch && !previewAfterSearch.includes(previewNonce), "an ordinary preview changed after search projection or clearing");
+    // The searchable projection is rendered text: links contribute labels but never destinations,
+    // and ranges include overlapping Unicode-folded occurrences without rescanning the source.
+    const linkFixture = "[visible needle](https://needle.invalid)\\n\\n[visible label](https://url-only.invalid/needle)\\n\\n~~~javascript\\nconst crossTokenNeedle = true;\\n~~~";
+    window.__events.emit({ status: "complete", responses: [response("visible-projection", linkFixture)], latestId: "visible-projection", revision: 32 });
+    ok(await pollUntil(() => body.textContent.includes("crossTokenNeedle")), "visible-projection fixture did not render");
+    search.value = "needle.invalid"; search.dispatchEvent(new Event("input", { bubbles: true }));
+    ok(matchCount.textContent === "0 of 0 matches" && !document.querySelector(".navigator-item"), "a Markdown link destination was indexed as visible text");
+    search.value = "visible needle"; search.dispatchEvent(new Event("input", { bubbles: true })); nextMatch.click();
+    ok(await pollUntil(() => body.querySelector("mark.response-search-match")?.textContent === "visible needle"), "a visible Markdown link label was not navigable");
+    search.value = "const crossToken"; search.dispatchEvent(new Event("input", { bubbles: true })); nextMatch.click();
+    ok(await pollUntil(() => [...body.querySelectorAll("mark.response-search-match")].map(mark => mark.textContent).join("") === "const crossToken"), "a match spanning Prism text nodes was not fully highlighted");
+    const overlap = window.ResponseViewerNavigator.ranges(window.ResponseViewerNavigator.foldedText("aaa"), window.ResponseViewerNavigator.foldedNeedle("aa"));
+    ok(overlap.length === 2 && overlap[1].start === 1, "callable folded range enumeration lost overlapping matches");
+    const searchStarted = performance.now(), performanceRanges = window.ResponseViewerNavigator.ranges(window.ResponseViewerNavigator.foldedText("x".repeat(200_000) + " needle".repeat(501)), window.ResponseViewerNavigator.foldedNeedle("needle"));
+    ok(performanceRanges.length === 501 && performance.now() - searchStarted < 2_000, "bounded match enumeration regressed to repeated full-source scans");
+    // A malformed matching-nonce payload and an over-budget valid payload are private like the body:
+    // neither source nor nonce may be searchable or previewable.
+    const privateNonce = "private-" + Math.random().toString(36).slice(2);
+    const malformedPrivate = ["~~~pi-tool", "{\\\"nonce\\\":\\\"" + privateNonce + "\\\",\\\"name\\\":\\\"private-secret\\\"", "~~~"].join("\\n");
+    const overflowPrivate = Array.from({ length: 257 }, (_, index) => exportFence("pi-tool", { nonce: privateNonce, id: "private-" + index, name: "Read", summary: "f" + index, status: "ok", result: index === 256 ? "overflow-secret" : "ordinary", truncated: false })).join("\\n\\n");
+    window.__events.emit({ status: "complete", responses: [response("private-malformed", malformedPrivate), response("private-overflow", overflowPrivate)], latestId: "private-overflow", revision: 33, nonce: privateNonce });
+    ok(await pollUntil(() => body.querySelectorAll(".tool-step").length === 256), "private-fence overflow fixture did not render its visible budget");
+    search.value = "private-secret"; search.dispatchEvent(new Event("input", { bubbles: true }));
+    ok(matchCount.textContent === "0 of 0 matches" && ![...document.querySelectorAll(".navigator-title,.navigator-detail")].some(node => node.textContent.includes(privateNonce)), "a malformed private payload exposed nonce-bearing text");
+    search.value = "overflow-secret"; search.dispatchEvent(new Event("input", { bubbles: true }));
+    ok(matchCount.textContent === "0 of 0 matches", "an over-budget private payload was indexed");
+    const longCodeMatch = Array.from({ length: 25 }, (_, index) => index === 24 ? "collapsed needle" : "line " + index).join("\\n");
+    window.__events.emit({ status: "complete", responses: [response("collapsed-match", "~~~javascript\\n" + longCodeMatch + "\\n~~~")], latestId: "collapsed-match", revision: 34, nonce: privateNonce });
+    ok(await pollUntil(() => body.querySelector("pre.code-collapsed")), "collapsed-code fixture did not render a collapsed block");
+    search.value = "collapsed needle"; search.dispatchEvent(new Event("input", { bubbles: true })); nextMatch.click();
+    ok(await pollUntil(() => !body.querySelector("pre")?.classList.contains("code-collapsed") && body.querySelector("mark.response-search-match")?.textContent === "collapsed needle"), "a collapsed-code match was not expanded through its normal control");
+    const exactlyFiveHundred = Array.from({ length: 500 }, () => "needle").join(" ");
+    window.__events.emit({ status: "complete", responses: [response("exact-cap", exactlyFiveHundred)], latestId: "exact-cap", revision: 35, nonce: privateNonce });
+    ok(await pollUntil(() => body.textContent.includes("needle")), "exact-cap fixture did not render"); search.value = "needle"; search.dispatchEvent(new Event("input", { bubbles: true }));
+    ok(matchCount.textContent === "0 of 500 matches", "exactly 500 matches incorrectly disclosed an extra result");
+    const beyondOldFoldLimit = "a".repeat(2 * 1024 * 1024 + 128) + " searchable needle";
+    window.__events.emit({ status: "complete", responses: [response("beyond-old-fold-limit", beyondOldFoldLimit)], latestId: "beyond-old-fold-limit", revision: 36, nonce: privateNonce });
+    ok(await pollUntil(() => body.textContent.includes("searchable needle")), "large searchable fixture did not render"); search.value = "searchable needle"; search.dispatchEvent(new Event("input", { bubbles: true }));
+    ok(matchCount.textContent === "0 of 1 matches", "a legal response beyond the old 2 MiB fold ceiling was not searchable");
+    nextMatch.click(); ok(await pollUntil(() => body.querySelector("mark.response-search-match")), "large-response navigation did not create a highlight");
+    const liveIndexesAfterFirstNavigation = window.ResponseViewerNavigator.largeIndexBuilds(); nextMatch.click();
+    ok(window.ResponseViewerNavigator.largeIndexBuilds() === liveIndexesAfterFirstNavigation, "repeated match navigation rebuilt the selected live-body index");
+    // Projection work is lazy: receipt and status-only updates leave detached rendering untouched.
+    search.value = ""; search.dispatchEvent(new Event("input", { bubbles: true }));
+    const buildsBeforeLazy = window.ResponseViewerNavigator.projectionBuilds(), indexesBeforeLazy = window.ResponseViewerNavigator.largeIndexBuilds(), lazyLarge = "l".repeat(1024 * 1024 + 128) + " lazy visible needle";
+    window.__events.emit({ status: "complete", responses: [response("lazy", lazyLarge)], latestId: "lazy", revision: 37, nonce: privateNonce });
+    ok(window.ResponseViewerNavigator.projectionBuilds() === buildsBeforeLazy && window.ResponseViewerNavigator.largeIndexBuilds() === indexesBeforeLazy, "an empty-query receipt built a detached search projection or folded index");
+    window.__events.emit({ status: "running", responses: [response("lazy", lazyLarge, "running")], latestId: "lazy", revision: 38, nonce: privateNonce });
+    ok(window.ResponseViewerNavigator.projectionBuilds() === buildsBeforeLazy && window.ResponseViewerNavigator.largeIndexBuilds() === indexesBeforeLazy, "a status-only update rebuilt detached search state");
+    search.value = "lazy visible needle"; search.dispatchEvent(new Event("input", { bubbles: true }));
+    ok(await pollUntil(() => window.ResponseViewerNavigator.projectionBuilds() > buildsBeforeLazy && window.ResponseViewerNavigator.largeIndexBuilds() > indexesBeforeLazy), "a non-empty search did not build its deferred large projection/index");
+    nextMatch.click(); const indexesAfterFirstHighlight = window.ResponseViewerNavigator.largeIndexBuilds();
+    ok(await pollUntil(() => body.querySelector("mark.response-search-match")), "large lazy search did not build the selected-body index");
+    search.value = ""; search.dispatchEvent(new Event("input", { bubbles: true }));
+    const buildsAfterRelease = window.ResponseViewerNavigator.projectionBuilds(), indexesAfterRelease = window.ResponseViewerNavigator.largeIndexBuilds();
+    window.__events.emit({ status: "complete", responses: [response("lazy", lazyLarge)], latestId: "lazy", revision: 39, nonce: privateNonce });
+    ok(window.ResponseViewerNavigator.projectionBuilds() === buildsAfterRelease && window.ResponseViewerNavigator.largeIndexBuilds() === indexesAfterRelease, "empty-query update retained or rebuilt released search state");
+    search.value = "lazy visible needle"; search.dispatchEvent(new Event("input", { bubbles: true })); nextMatch.click();
+    ok(await pollUntil(() => window.ResponseViewerNavigator.projectionBuilds() > buildsAfterRelease && window.ResponseViewerNavigator.largeIndexBuilds() > indexesAfterFirstHighlight && body.querySelector("mark.response-search-match")), "clearing search did not release large projection and selected-body indexes for lazy rebuild");
+    // BR is a real visible boundary, rather than an invisible text join.
+    window.__events.emit({ status: "complete", responses: [response("br-boundary", "alpha<br>beta")], latestId: "br-boundary", revision: 40, nonce: privateNonce });
+    ok(await pollUntil(() => body.textContent.includes("alpha")), "BR-boundary fixture did not render"); search.value = "alphabeta"; search.dispatchEvent(new Event("input", { bubbles: true }));
+    ok(matchCount.textContent === "0 of 0 matches", "search joined text across a rendered BR");
+    // An in-budget Mermaid block gets the same budget treatment in the detached projection as the
+    // reader: its source is hidden, and it consumes one of the 64 rich-fence slots.
+    const mermaidBudget = ["~~~mermaid", "graph TD; A[mermaid needle]-->B;", "~~~", ...Array.from({ length: 64 }, (_, index) => "~~~json\\n{\\\"slot\\\":" + index + "}\\n~~~")].join("\\n\\n");
+    window.__events.emit({ status: "complete", responses: [response("mermaid-budget", mermaidBudget)], latestId: "mermaid-budget", revision: 41, nonce: privateNonce });
+    ok(await pollUntil(() => body.querySelector(".mermaid-host svg") && body.querySelectorAll(".json-view").length === 63), "Mermaid did not consume the same rich-fence budget as live decoration");
+    search.value = "mermaid needle"; search.dispatchEvent(new Event("input", { bubbles: true }));
+    ok(matchCount.textContent === "0 of 0 matches" && !window.ResponseViewerNavigator.visibleMap(body).text.includes("mermaid needle"), "an in-budget Mermaid source was indexed despite being hidden");
+    // CSV header buttons are visible reader text, and ordinal fallback can restore a post-sort match.
+    const csvNeedle = "needle column,value\\nfirst,2\\nsecond,1";
+    window.__events.emit({ status: "complete", responses: [response("csv-heading", "~~~csv\\n" + csvNeedle + "\\n~~~")], latestId: "csv-heading", revision: 42, nonce: privateNonce });
+    ok(await pollUntil(() => body.querySelector(".csv-view th button")), "CSV heading fixture did not render"); search.value = "needle column"; search.dispatchEvent(new Event("input", { bubbles: true })); nextMatch.click();
+    ok(await pollUntil(() => body.querySelector(".csv-view th mark.response-search-match")), "visible CSV header button text was not searchable");
+    body.querySelector(".csv-view th button").click(); nextMatch.click();
+    ok(await pollUntil(() => body.querySelector(".csv-view th mark.response-search-match")), "post-sort navigation did not restore the CSV header match");
+    // The global cap hides later navigator rows without a navigable match.
+    const capFirst = Array.from({ length: 501 }, () => "needle").join(" ");
+    window.__events.emit({ status: "complete", responses: [response("cap-first", capFirst), response("cap-later", "needle later")], latestId: "cap-later", revision: 43, nonce: privateNonce });
+    ok(await pollUntil(() => body.textContent.includes("needle later")), "cap-row fixture did not render"); search.value = "needle"; search.dispatchEvent(new Event("input", { bubbles: true }));
+    ok(document.querySelectorAll(".navigator-item").length === 1 && document.querySelector(".navigator-item")?.dataset.responseId === "cap-first" && matchCount.textContent === "0 of 500+ matches", "a non-navigable later response survived the global match cap");
+    // Manual history selection and automatic latest following reset a stale match cursor.
+    const switchA = "# A\\n\\nneedle A", switchB = "# B\\n\\nneedle B", switchC = "# C\\n\\nneedle C";
+    window.__events.emit({ status: "complete", responses: [response("switch-a", switchA), response("switch-b", switchB)], latestId: "switch-b", revision: 44, nonce: privateNonce });
+    ok(await pollUntil(() => body.textContent.includes("needle B")), "switch fixture did not render"); search.value = "needle"; search.dispatchEvent(new Event("input", { bubbles: true })); nextMatch.click();
+    document.getElementById("next-response").click(); ok(await pollUntil(() => body.textContent.includes("needle B") && matchCount.textContent === "0 of 2 matches"), "manual response selection retained a stale match cursor");
+    window.__events.emit({ status: "complete", responses: [response("switch-a", switchA), response("switch-b", switchB), response("switch-c", switchC)], latestId: "switch-c", revision: 45, nonce: privateNonce });
+    ok(await pollUntil(() => body.textContent.includes("needle C") && matchCount.textContent === "0 of 3 matches"), "automatic latest following retained a stale match cursor");
+    // A near-legal 4 MiB response gets one reusable folded index; range navigation does not rebuild it.
+    const nearLimit = "x".repeat(4 * 1024 * 1024 - 32) + " searchable needle", nearPrepared = window.ResponseViewerNavigator.foldedText(nearLimit), indexesBeforeReuse = window.ResponseViewerNavigator.largeIndexBuilds();
+    ok(window.ResponseViewerNavigator.ranges(nearPrepared, window.ResponseViewerNavigator.foldedNeedle("searchable needle"), 1).length === 1, "a near-legal 4 MiB response was not searchable");
+    window.ResponseViewerNavigator.ranges(nearPrepared, window.ResponseViewerNavigator.foldedNeedle("searchable needle"), 1);
+    ok(window.ResponseViewerNavigator.largeIndexBuilds() === indexesBeforeReuse, "repeated navigation rebuilt a cached large response index");
+    // Cleanup removes the named controls too: a closed reader cannot rehydrate its cache or mutate DOM.
+    const beforeClose = body.innerHTML; window.__events.emit({ status: "closed", responses: [], latestId: null, revision: 46, nonce: privateNonce }); previousMatch.click(); nextMatch.click();
+    ok(body.innerHTML === beforeClose, "closed viewer match controls still mutated the response body");
     document.title = "PASS: response viewer browser smoke";
   } catch (error) { document.title = "FAIL: " + (error instanceof Error ? error.message : String(error)); }
 })();

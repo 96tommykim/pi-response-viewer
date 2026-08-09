@@ -12,7 +12,7 @@ A local, output-only browser reader for [Pi](https://github.com/earendil-works/p
 - Mermaid diagrams and collapsible file trees for `mermaid` / `tree` fences
 - Copy, wrap, and expand controls for code blocks
 - `/viewer on|off` to enable or disable the viewer per session
-- Searchable Response Navigator with Cmd/Ctrl+K focus, response status, and history navigation
+- Searchable Response Navigator with Cmd/Ctrl+K focus, response status, history navigation, and per-match next/previous navigation
 - Rich Mermaid, tree, unified diff, JSON tree, and sortable CSV fences; `title=` / `filename=` code labels
 - Explicit client-side Markdown copy/download for the selected response or retained history
 - Print current response or all retained responses, plus responsive dark/light reader and PDF styles
@@ -34,15 +34,14 @@ The reader shows the prompt that opened each turn, the assistant's text and thin
 
 ## Development
 
-Node 22.19+ and a global Pi installation are required for typechecking.
+Node 22.19+ is required. Git installs use Pi's conventional `extensions/<name>/index.ts` discovery, so no dependency installation is needed.
 
 ```sh
-npm ci
-npm test
-npm run package:check
+node --experimental-strip-types extensions/response-viewer/test.ts
+node --experimental-strip-types extensions/response-viewer/security-test.ts
 ```
 
-`test:browser` uses a locally installed Chrome or Chromium when available and skips otherwise.
+The Chromium smoke test uses a locally installed Chrome or Chromium when available and skips otherwise.
 
 ## License
 

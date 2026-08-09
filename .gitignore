@@ -1,5 +1,3 @@
-node_modules/
-*.tgz
 .pi-subagents/
 .vscode/
 docs/superpowers/

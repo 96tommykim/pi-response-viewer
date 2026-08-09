@@ -50,6 +50,8 @@
       else {
         const current = getCurrentBody()?.cloneNode(true); if (!current) return;
         current.removeAttribute("id"); current.classList.add("print-response", "article-body");
+        // Search highlights are reader-only navigation chrome and must not affect a printed response.
+        for (const mark of current.querySelectorAll("mark.response-search-match")) mark.replaceWith(document.createTextNode(mark.textContent || ""));
         // The clone is #response-body; the "· Response truncated" marker lives in #response-meta.
         if (responses[0]?.truncated === true) { const note = document.createElement("p"); note.className = "print-drop-note"; note.textContent = DROP_NOTE; current.append(note); }
         surface.append(current);

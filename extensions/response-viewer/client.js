@@ -1,9 +1,9 @@
 /* Local reader interaction. Markdown insertions are sanitized by renderer.js before assignment. */
 (() => {
   const $ = id => document.getElementById(id);
-  const body = $("response-body"), outline = $("outline-links"), outlinePanel = $("response-outline"), status = $("status"), title = $("response-title"), meta = $("response-meta"), newContent = $("new-content"), toolbar = document.querySelector(".toolbar"), historyControl = $("history-control"), previous = $("previous-response"), next = $("next-response"), historyPosition = $("history-position"), navigatorPanel = $("response-navigator"), navigatorRoot = $("navigator-list"), navigatorInput = $("navigator-search"), navigatorCount = $("navigator-count");
+  const body = $("response-body"), outline = $("outline-links"), outlinePanel = $("response-outline"), status = $("status"), title = $("response-title"), meta = $("response-meta"), newContent = $("new-content"), toolbar = document.querySelector(".toolbar"), historyControl = $("history-control"), previous = $("previous-response"), next = $("next-response"), historyPosition = $("history-position"), navigatorPanel = $("response-navigator"), navigatorRoot = $("navigator-list"), navigatorInput = $("navigator-search"), navigatorCount = $("navigator-count"), matchControls = $("navigator-match-controls"), previousMatch = $("previous-match"), nextMatch = $("next-match"), matchCount = $("navigator-match-count");
   const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)"), narrow = matchMedia("(max-width: 1180px)");
-  let raw = "", renderedId = null, revision = -1, following = true, events, destroyed = false, reconnecting = false, scrollGuardUntil = 0, scrollRaf = 0, followRaf = 0, toggleRaf = 0, renderTimer = 0, pendingHash = "", outlineInitialized = false, headings = [], activeLink, snapshot, selectedId = null, pendingRender, responseNavigator, exporter;
+  let raw = "", renderedId = null, revision = -1, following = true, events, destroyed = false, reconnecting = false, scrollGuardUntil = 0, scrollRaf = 0, followRaf = 0, toggleRaf = 0, renderTimer = 0, pendingHash = "", outlineInitialized = false, headings = [], activeLink, snapshot, selectedId = null, pendingRender, responseNavigator, exporter, matchSelection, bodySearchCache;
   const codePreferences = new Map(), maxCodePreferences = 256, MAX_SPECIAL_FENCES = 64, MAX_TOOL_FENCES = 256, promptExpansions = new Set();
   const rememberCodePreference = (responseId, index, patch) => { let response = codePreferences.get(responseId); if (!response) { response = new Map(); codePreferences.set(responseId, response); } let preference = response.get(index); if (!preference) { if (response.size >= maxCodePreferences) return; preference = { wrapped: false, expanded: false }; response.set(index, preference); } Object.assign(preference, patch); if (!preference.wrapped && !preference.expanded) response.delete(index); if (!response.size) codePreferences.delete(responseId); };
   const pruneCodePreferences = responses => { const ids = new Set(responses.map(response => response.id)); for (const id of codePreferences.keys()) if (!ids.has(id)) codePreferences.delete(id); for (const id of promptExpansions) if (!ids.has(id)) promptExpansions.delete(id); };
@@ -64,6 +64,78 @@
     });
     body.querySelectorAll("table").forEach(table => { if (table.closest(".csv-view")) return; const wrap = document.createElement("div"); wrap.className = "table-wrap"; table.replaceWith(wrap); wrap.append(table); });
   };
+  const clearSearchHighlights = () => {
+    for (const mark of body.querySelectorAll("mark.response-search-match")) {
+      const parent = mark.parentNode;
+      mark.replaceWith(document.createTextNode(mark.textContent || ""));
+      parent?.normalize();
+    }
+  };
+  const bodyMatches = query => {
+    const map = window.ResponseViewerNavigator.visibleMap(body), needle = window.ResponseViewerNavigator.foldedNeedle(query);
+    if (!bodySearchCache || bodySearchCache.text !== map.text || bodySearchCache.query !== query) bodySearchCache = { text: map.text, query, ranges: window.ResponseViewerNavigator.ranges(window.ResponseViewerNavigator.foldedText(map.text), needle, window.ResponseViewerNavigator.MAX_MATCHES + 1) };
+    return { map, ranges: bodySearchCache.ranges };
+  };
+  const matchData = () => responseNavigator?.matches?.() || { matches: [], capped: false };
+  const matchIndex = data => {
+    if (!matchSelection) return -1;
+    let index = data.matches.findIndex(match => match.responseId === matchSelection.responseId && match.start === matchSelection.start && match.end === matchSelection.end);
+    if (index < 0) index = data.matches.findIndex(match => match.responseId === matchSelection.responseId && match.occurrence === matchSelection.occurrence);
+    if (index >= 0) matchSelection = data.matches[index]; else matchSelection = undefined;
+    return index;
+  };
+  const updateMatchControls = () => {
+    const query = navigatorInput.value.trim(), data = matchData(), index = matchIndex(data), total = data.matches.length;
+    matchControls.hidden = !query;
+    previousMatch.disabled = !total; nextMatch.disabled = !total;
+    if (!query) { matchCount.textContent = ""; return; }
+    matchCount.textContent = `${index + 1} of ${total}${data.capped ? "+" : ""} matches`;
+  };
+  const expandMatchContainers = marks => {
+    for (const mark of marks) {
+      for (let details = mark.closest("details"); details; details = details.parentElement?.closest("details")) details.open = true;
+      const pre = mark.closest("pre.code-collapsed");
+      // Use the existing action rather than changing its classes directly so the per-response code
+      // preference survives the next streaming render just like an explicit user expansion.
+      pre?.closest(".code-block")?.querySelector(".code-expand-toggle")?.click();
+    }
+  };
+  const applyCurrentMatch = scroll => {
+    clearSearchHighlights();
+    if (!matchSelection || matchSelection.responseId !== selectedId) return false;
+    const query = navigatorInput.value.trim(); if (!query) return false;
+    const matched = bodyMatches(query);
+    // Prefer the original offsets; after safe DOM reordering (for example CSV sort) the same
+    // per-response occurrence remains a deterministic target. Never clamp to a different hit.
+    const target = matched.ranges.find(range => range.start === matchSelection.start && range.end === matchSelection.end) || matched.ranges[matchSelection.occurrence];
+    if (!target) return false;
+    const fragments = matched.map.segments.filter(segment => segment.start < target.end && segment.end > target.start);
+    if (!fragments.length) return false;
+    const marks = [];
+    for (const segment of fragments.reverse()) {
+      const range = document.createRange(), start = Math.max(target.start, segment.start) - segment.start, end = Math.min(target.end, segment.end) - segment.start;
+      range.setStart(segment.node, start); range.setEnd(segment.node, end);
+      const mark = document.createElement("mark"); mark.className = "response-search-match"; range.surroundContents(mark); marks.unshift(mark);
+    }
+    expandMatchContainers(marks);
+    if (scroll) marks[0].scrollIntoView({ block: "center", behavior: reducedMotion.matches ? "auto" : "smooth" });
+    return true;
+  };
+  const restoreCurrentMatch = scroll => { updateMatchControls(); return applyCurrentMatch(scroll); };
+  const navigateMatches = direction => {
+    const data = matchData(), total = data.matches.length;
+    if (!total) return;
+    const index = matchIndex(data), nextIndex = index < 0 ? (direction > 0 ? 0 : total - 1) : (index + direction + total) % total;
+    matchSelection = data.matches[nextIndex];
+    selectResponse(matchSelection.responseId, matchSelection);
+    announce(`Match ${nextIndex + 1} of ${total}${data.capped ? " or more" : ""}.`);
+  };
+  const onSearchInput = () => { matchSelection = undefined; clearSearchHighlights(); if (!navigatorInput.value.trim()) bodySearchCache = undefined; updateMatchControls(); };
+  const onSearchKeydown = event => {
+    if (event.key !== "Enter") return;
+    event.preventDefault(); navigateMatches(event.shiftKey ? -1 : 1);
+  };
+  const onPreviousMatch = () => navigateMatches(-1), onNextMatch = () => navigateMatches(1);
   const selected = () => snapshot?.responses?.find(response => response?.id === selectedId);
   // A viewer fence is exactly three lines — opener, single-line JSON payload, closer — and that
   // payload's first key is the session nonce. Skipping only the delimiter lines would return the
@@ -89,7 +161,7 @@
     const identityChanged = renderedId !== response.id, changed = identityChanged || raw !== response.markdown, wasFollowing = following && nearBottom();
     let hashHandled = false;
     if (changed) {
-      raw = response.markdown; renderedId = response.id; body.innerHTML = window.ResponseViewerRenderer.render(raw);
+      raw = response.markdown; renderedId = response.id; bodySearchCache = undefined; body.innerHTML = window.ResponseViewerRenderer.render(raw);
       if (response.prompt && response.prompt.text) {
         const header = document.createElement("div"); header.className = "response-prompt";
         const text = document.createElement("div"); text.className = "response-prompt-text"; text.textContent = response.prompt.text;
@@ -120,20 +192,29 @@
     }
     // A missing fragment must not suppress follow or survive into another response.
     if ((response.status === "complete" || response.status === "error") && pendingHash) clearHash();
+    if (changed && matchSelection?.responseId === response.id) applyCurrentMatch(false);
     if (changed && !hashHandled && !pendingHash && !identityChanged && wasFollowing && response.id === snapshot.latestId) { if (followRaf) cancelAnimationFrame(followRaf); followRaf = requestAnimationFrame(() => { followRaf = 0; if (!destroyed && following) scrollLatest(false); }); } else if (changed && !hashHandled && !pendingHash && !wasFollowing && response.id === snapshot.latestId) { following = false; newContent.hidden = false; } if (changed) scheduleSync();
     if (response.error) announce(response.error); updateChrome();
   };
   const scheduleRender = () => { pendingRender = snapshot; if (renderTimer || destroyed) return; renderTimer = setTimeout(() => { renderTimer = 0; if (pendingRender) renderNow(); }, cadence(selected()?.markdown || "")); };
   const clearHash = () => { pendingHash = ""; if (!location.hash) return; history.replaceState(null, "", `${location.pathname}${location.search}`); };
-  const selectResponse = id => { if (!snapshot?.responses?.some(response => response.id === id)) return; selectedId = id; pauseFollow(); newContent.hidden = true; clearHash(); renderNow(); responseNavigator?.update(snapshot, selectedId); document.querySelector(".response-header")?.scrollIntoView({ block: "start", behavior: "instant" }); };
+  const selectResponse = (id, match) => {
+    if (!snapshot?.responses?.some(response => response.id === id)) return;
+    if (!match) { matchSelection = undefined; clearSearchHighlights(); updateMatchControls(); }
+    selectedId = id; pauseFollow(); newContent.hidden = true; clearHash(); renderNow(); responseNavigator?.update(snapshot, selectedId);
+    if (match) { matchSelection = match; restoreCurrentMatch(true); }
+    else document.querySelector(".response-header")?.scrollIntoView({ block: "start", behavior: "instant" });
+  };
   const choose = direction => { const responses = snapshot?.responses || [], index = responses.findIndex(response => response.id === selectedId), nextIndex = index + direction; if (nextIndex < 0 || nextIndex >= responses.length) return; selectResponse(responses[nextIndex].id); };
   responseNavigator = window.ResponseViewerNavigator.create({ root: navigatorRoot, input: navigatorInput, count: navigatorCount, select: selectResponse });
+  navigatorInput.addEventListener("input", onSearchInput); navigatorInput.addEventListener("keydown", onSearchKeydown);
+  previousMatch.addEventListener("click", onPreviousMatch); nextMatch.addEventListener("click", onNextMatch);
   const copyResponse = $("copy-response");
   exporter = window.ResponseViewerExport.create({ getSnapshot: () => snapshot, getSelected: () => selectedId, getCurrentBody: () => body, copy, render: window.ResponseViewerRenderer.render });
   copyResponse.addEventListener("click", () => exporter.copyCurrent(copyResponse)); $("download-response").addEventListener("click", () => exporter.downloadCurrent()); $("download-history").addEventListener("click", () => exporter.downloadAll()); $("print-response").addEventListener("click", () => exporter.printCurrent()); $("print-history").addEventListener("click", () => exporter.printAll());
   const commandSearch = event => { if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") { event.preventDefault(); responseNavigator.focus(); } }; addEventListener("keydown", commandSearch);
   previous.addEventListener("click", () => choose(-1)); next.addEventListener("click", () => choose(1));
-  const cleanup = () => { if (destroyed) return; destroyed = true; if (events) events.close(); if (renderTimer) clearTimeout(renderTimer); if (scrollRaf) cancelAnimationFrame(scrollRaf); if (followRaf) cancelAnimationFrame(followRaf); if (toggleRaf) cancelAnimationFrame(toggleRaf); headings = []; activeLink = undefined; codePreferences.clear(); promptExpansions.clear(); responseNavigator?.destroy(); exporter?.destroy(); removeEventListener("keydown", commandSearch); removeEventListener("scroll", scheduleSync); removeEventListener("hashchange", hashNavigation); narrow.removeEventListener("change", mediaChange); outlinePanel.removeEventListener("toggle", outlineToggle); };
+  const cleanup = () => { if (destroyed) return; destroyed = true; if (events) events.close(); if (renderTimer) clearTimeout(renderTimer); if (scrollRaf) cancelAnimationFrame(scrollRaf); if (followRaf) cancelAnimationFrame(followRaf); if (toggleRaf) cancelAnimationFrame(toggleRaf); headings = []; activeLink = undefined; codePreferences.clear(); promptExpansions.clear(); clearSearchHighlights(); responseNavigator?.destroy(); exporter?.destroy(); navigatorInput.removeEventListener("input", onSearchInput); navigatorInput.removeEventListener("keydown", onSearchKeydown); previousMatch.removeEventListener("click", onPreviousMatch); nextMatch.removeEventListener("click", onNextMatch); removeEventListener("keydown", commandSearch); removeEventListener("scroll", scheduleSync); removeEventListener("hashchange", hashNavigation); narrow.removeEventListener("change", mediaChange); outlinePanel.removeEventListener("toggle", outlineToggle); };
   const receive = nextSnapshot => {
     if (!nextSnapshot || destroyed) return; if (nextSnapshot.status === "closed") { cleanup(); return; } if (nextSnapshot.revision <= revision) return;
     const priorLatest = snapshot?.latestId, priorSelected = selectedId, wasReconnecting = reconnecting; snapshot = nextSnapshot; revision = nextSnapshot.revision;
@@ -143,7 +224,8 @@
     if (!selectedId) selectedId = snapshot.latestId || responses.at(-1)?.id || null;
     else if (priorSelected === priorLatest && snapshot.latestId && snapshot.latestId !== priorLatest) selectedId = snapshot.latestId;
     else if (!responses.some(response => response.id === selectedId)) selectedId = responses[0]?.id || snapshot.latestId || null;
-    responseNavigator?.update(snapshot, selectedId);
+    if (selectedId !== priorSelected) { matchSelection = undefined; clearSearchHighlights(); }
+    responseNavigator?.update(snapshot, selectedId); updateMatchControls();
     const response = selected(), selectedChanged = selectedId !== renderedId;
     // The initial response owns an incoming deep link; later response changes do not.
     if (selectedChanged && renderedId !== null) clearHash();

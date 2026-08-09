@@ -35,7 +35,7 @@
     summary.className = "tool-step-summary";
     summary.textContent = typeof step.summary === "string" ? step.summary : "";
     summary.title = summary.textContent;
-    row.append(glyph, name, summary);
+    row.append(glyph, name, document.createTextNode(" "), summary);
     view.append(row);
     const result = typeof step.result === "string" ? step.result : "";
     if (result) {
