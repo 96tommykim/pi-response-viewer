@@ -12,7 +12,7 @@ A local, output-only browser reader for [Pi](https://github.com/earendil-works/p
 - Mermaid diagrams and collapsible file trees for `mermaid` / `tree` fences
 - Copy, wrap, and expand controls for code blocks
 - `/viewer on|off` to enable or disable the viewer per session
-- Searchable Response Navigator with Cmd/Ctrl+K focus, response status, history navigation, and per-match next/previous navigation
+- Searchable Response Navigator for rendered answer content and tool names/summaries (excluding Tool Result and Thinking bodies), with Cmd/Ctrl+K focus, response status, history navigation, and per-match next/previous navigation
 - Rich Mermaid, tree, unified diff, JSON tree, and sortable CSV fences; `title=` / `filename=` code labels
 - Explicit client-side Markdown copy/download for the selected response or retained history
 - Print current response or all retained responses, plus responsive dark/light reader and PDF styles

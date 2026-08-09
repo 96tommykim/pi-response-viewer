@@ -344,7 +344,8 @@ Element.prototype.scrollIntoView = function(options) { window.__scrollTarget = t
     // characters back from a match, so a hit anywhere in a tool step excerpted the payload's first key
     // — the session nonce — and the payload's own keys were matchable through fold()/match(). Searching
     // a tool name is ordinary now that the reader shows tool steps. The navigator searches and excerpts
-    // a projection instead: the text the reader shows, forged fences left exactly as written.
+    // a projection of answer text and tool names/summaries, with disclosure bodies excluded and forged
+    // fences left exactly as written.
     const navNonceValue = "nav-" + Math.random().toString(36).slice(2);
     const navToolFence = exportFence("pi-tool", { nonce: navNonceValue, id: "call-nav", name: "Read", summary: "state.ts", status: "ok", result: "the file body", truncated: false });
     const navThinkFence = exportFence("pi-think", { nonce: navNonceValue, thinking: "considering the parser", truncated: false });
@@ -360,9 +361,8 @@ Element.prototype.scrollIntoView = function(options) { window.__scrollTarget = t
     const toolExcerpt = await searchExcerpt("read", "tool-name search");
     ok(!toolExcerpt.includes(navNonceValue), "searching a tool name leaked the session nonce into the navigator excerpt");
     ok(toolExcerpt.includes("Read") && toolExcerpt.includes("state.ts"), "searching a tool name lost the step's name/summary from the excerpt");
-    const thinkExcerpt = await searchExcerpt("considering", "thinking search");
-    ok(!thinkExcerpt.includes(navNonceValue), "searching a thinking block leaked the session nonce into the navigator excerpt");
-    ok(thinkExcerpt.includes("considering the parser"), "searching a thinking block lost the thinking text from the excerpt");
+    search.value = "considering"; search.dispatchEvent(new Event("input", { bubbles: true }));
+    ok(await pollUntil(() => !document.querySelector(".navigator-item")), "a Thinking body was searchable in the navigator");
     const forgedExcerpt = await searchExcerpt("Writefile", "forged-fence search");
     ok(!forgedExcerpt.includes(navNonceValue), "a forged fence's excerpt leaked the session nonce");
     ok(forgedExcerpt.includes("Writefile") && forgedExcerpt.includes("forged-nav-nonce"), "a forged fence was flattened instead of staying literal in the navigator excerpt");
@@ -380,31 +380,35 @@ Element.prototype.scrollIntoView = function(options) { window.__scrollTarget = t
     window.__events.emit({ status: "complete", responses: [response("match-one", matchOne), response("match-two", matchTwo)], latestId: "match-two", revision: 28, nonce: matchNonceValue });
     ok(await pollUntil(() => body.textContent.includes("plain needle") && window.ResponseViewerNonce === matchNonceValue), "match-navigation fixture did not render");
     const previousMatch = document.getElementById("previous-match"), nextMatch = document.getElementById("next-match"), matchControls = document.getElementById("navigator-match-controls"), matchCount = document.getElementById("navigator-match-count");
+    // Body content stays out of search even after users manually expand the disclosures.
+    const matchThinking = body.querySelector(".thinking-view"), matchToolResult = body.querySelector(".tool-step-result");
+    ok(matchThinking instanceof HTMLDetailsElement && matchToolResult instanceof HTMLDetailsElement, "search-scope fixture did not render its disclosures");
+    matchThinking.open = true; matchToolResult.open = true;
+    search.value = "thinking needle"; search.dispatchEvent(new Event("input", { bubbles: true }));
+    ok(matchCount.textContent === "0 of 0 matches" && !document.querySelector(".navigator-item"), "an expanded Thinking body was searchable");
+    search.value = "tool needle"; search.dispatchEvent(new Event("input", { bubbles: true }));
+    ok(matchCount.textContent === "0 of 0 matches" && !document.querySelector(".navigator-item"), "an expanded Tool Result body was searchable");
     search.value = "Readstate.ts"; search.dispatchEvent(new Event("input", { bubbles: true }));
     ok(matchCount.textContent === "0 of 0 matches" && !document.querySelector(".navigator-item"), "tool-row flex spacing was missing from the searchable projection");
     search.value = "Read state.ts"; search.dispatchEvent(new Event("input", { bubbles: true })); nextMatch.click();
     ok(await pollUntil(() => [...body.querySelectorAll("mark.response-search-match")].map(mark => mark.textContent).join("") === "Read state.ts"), "a semantic space between tool name and summary was not searchable");
     search.value = "needle"; search.dispatchEvent(new Event("input", { bubbles: true }));
-    ok(!matchControls.hidden && !previousMatch.disabled && !nextMatch.disabled && matchCount.textContent === "0 of 5 matches", "non-empty search did not expose enabled match controls with an honest count");
+    ok(!matchControls.hidden && !previousMatch.disabled && !nextMatch.disabled && matchCount.textContent === "0 of 3 matches", "non-empty search did not expose enabled match controls with an honest answer-only count");
     document.querySelector('.navigator-item[data-response-id="match-one"]').click();
     ok(await pollUntil(() => body.textContent.includes("needle first") && body.querySelector("mark.response-search-match")?.textContent === "needle"), "clicking a filtered response did not select and highlight its first match");
-    ok(matchCount.textContent === "1 of 5 matches" && window.__scrollTarget?.classList.contains("response-search-match"), "click-to-first-match did not update the position or scroll target");
+    ok(matchCount.textContent === "1 of 3 matches" && window.__scrollTarget?.classList.contains("response-search-match"), "click-to-first-match did not update the position or scroll target");
     search.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-    ok(await pollUntil(() => matchCount.textContent === "2 of 5 matches" && body.textContent.includes("needle second")), "Enter did not advance to the next occurrence in the same response");
+    ok(await pollUntil(() => matchCount.textContent === "2 of 3 matches" && body.textContent.includes("needle second")), "Enter did not advance to the next occurrence in the same response");
     search.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", shiftKey: true, bubbles: true }));
-    ok(await pollUntil(() => matchCount.textContent === "1 of 5 matches"), "Shift+Enter did not return to the previous occurrence");
+    ok(await pollUntil(() => matchCount.textContent === "1 of 3 matches"), "Shift+Enter did not return to the previous occurrence");
     nextMatch.click();
-    ok(await pollUntil(() => matchCount.textContent === "2 of 5 matches"), "Next match button did not navigate");
+    ok(await pollUntil(() => matchCount.textContent === "2 of 3 matches"), "Next match button did not navigate");
     nextMatch.click();
-    ok(await pollUntil(() => body.textContent.includes("plain needle") && matchCount.textContent === "3 of 5 matches"), "navigation did not continue into the next retained response");
+    ok(await pollUntil(() => body.textContent.includes("plain needle") && matchCount.textContent === "3 of 3 matches"), "navigation did not continue into the next retained response");
     nextMatch.click();
-    ok(await pollUntil(() => body.querySelector(".thinking-view")?.open && matchCount.textContent === "4 of 5 matches"), "a thinking match did not open its disclosure");
-    nextMatch.click();
-    ok(await pollUntil(() => body.querySelector(".tool-step-result")?.open && matchCount.textContent === "5 of 5 matches"), "a tool-result match did not open its disclosure");
-    nextMatch.click();
-    ok(await pollUntil(() => matchCount.textContent === "1 of 5 matches" && body.textContent.includes("needle first")), "match navigation did not cycle across retained responses");
+    ok(await pollUntil(() => matchCount.textContent === "1 of 3 matches" && body.textContent.includes("needle first")), "match navigation did not cycle across retained responses");
     window.__events.emit({ status: "running", responses: [response("match-one", matchOne + "\\n\\nstreamed needle", "running"), response("match-two", matchTwo)], latestId: "match-one", revision: 29, nonce: matchNonceValue });
-    ok(await pollUntil(() => body.textContent.includes("streamed needle") && matchCount.textContent === "1 of 6 matches" && body.querySelector("mark.response-search-match")?.textContent === "needle"), "streaming update did not rerender the selected response and preserve its highlight");
+    ok(await pollUntil(() => body.textContent.includes("streamed needle") && matchCount.textContent === "1 of 4 matches" && body.querySelector("mark.response-search-match")?.textContent === "needle"), "streaming update did not rerender the selected response and preserve its highlight");
     const matchDownloadsBefore = window.__downloads.length;
     document.getElementById("download-response").click();
     ok(await pollUntil(() => window.__downloads.length > matchDownloadsBefore), "search-state download did not complete");

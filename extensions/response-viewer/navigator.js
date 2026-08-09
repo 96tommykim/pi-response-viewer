@@ -44,7 +44,7 @@
     }
     return found;
   };
-  const excluded = element => !element || element.closest(".response-prompt,.heading-link,.code-label,.code-actions,.tool-step-glyph,.mermaid-host,[hidden],script,style,.tool-step-result > summary,.thinking-view > summary") || element.matches?.("pre") && element.closest(".code-block")?.querySelector(".mermaid-host");
+  const excluded = element => !element || element.closest(".response-prompt,.heading-link,.code-label,.code-actions,.tool-step-glyph,.mermaid-host,[hidden],script,style,.tool-step-result,.thinking-view") || element.matches?.("pre") && element.closest(".code-block")?.querySelector(".mermaid-host");
   // Produces reader-visible text and DOM segments. BR and block boundaries prevent false joins.
   const visibleMap = root => {
     const parts = [], segments = []; let length = 0, lastBreak = true;
