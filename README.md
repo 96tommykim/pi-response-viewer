@@ -9,7 +9,7 @@ A local, output-only browser reader for [Pi](https://github.com/earendil-works/p
 - Prompt header on every response, plus inline tool steps and collapsible thinking
 - Streaming Markdown with sanitized HTML, safe links, tables, lists, and headings
 - Local Prism highlighting for supported fenced languages
-- Mermaid diagrams and collapsible file trees for `mermaid` / `tree` fences
+- Mermaid diagrams and collapsible file trees for `mermaid` / `tree` fences; diagrams zoom with Ctrl/⌘ + scroll (trackpad pinch), pan by drag, reset on double-click, and open full screen
 - Copy, wrap, and expand controls for code blocks
 - `/viewer on|off` to enable or disable the viewer per session
 - Searchable Response Navigator for rendered answer content and tool names/summaries (excluding Tool Result and Thinking bodies), with Cmd/Ctrl+K focus, response status, history navigation, and per-match next/previous navigation

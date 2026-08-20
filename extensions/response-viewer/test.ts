@@ -867,6 +867,8 @@ assert.match(rendererSource, /(?:title|filename)/); assert.match(rendererSource,
 assert.match(exportSource, /plainMarkdown/, "export strips viewer-private fences");
 assert.match(exportSource, /pi-tool/);
 assert.doesNotMatch(mermaidViewSource, /https?:\/\//, "mermaid wrapper contains no remote URL");
+assert.match(mermaidViewSource, /transform-origin/, "mermaid zoom applies its own transform origin");
+assert.match(template, /\.mermaid-controls \{ display:none !important; \}/, "print hides the mermaid zoom controls");
 // The SVG namespace URI is a required literal, not a fetched remote reference.
 assert.match(treeViewSource, /http:\/\/www\.w3\.org\/2000\/svg/, "tree icons use the standard SVG namespace");
 const toolStepSource = await readFile(join(here, "tool-step-view.js"), "utf8");
