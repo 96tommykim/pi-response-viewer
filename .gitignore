@@ -1,3 +1,4 @@
 .pi-subagents/
 .vscode/
 docs/superpowers/
+node_modules/
